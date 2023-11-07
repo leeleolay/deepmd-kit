@@ -44,7 +44,7 @@ class Model(ABC):
         frz_model : str, optional
             The path to the frozen model
         ckpt_meta : str, optional
-            The path to the checkpoint and meta file
+            The path prefix of the checkpoint and meta files
         suffix : str, optional
             The suffix of the scope
         reuse : bool or tf.AUTO_REUSE, optional
@@ -112,7 +112,7 @@ class Model(ABC):
         frz_model : str, optional
             The path to the frozen model
         ckpt_meta : str, optional
-            The path to the checkpoint and meta file
+            The path prefix of the checkpoint and meta files
         suffix : str, optional
             The suffix of the scope
         reuse : bool or tf.AUTO_REUSE, optional
@@ -134,14 +134,31 @@ class Model(ABC):
                 suffix=suffix,
                 reuse=reuse,
             )
-            dout = tf.identity(dout, name="o_descriptor")
+            dout = tf.identity(dout, name="o_descriptor" + suffix)
         else:
             tf.constant(
-                self.rcut, name="descrpt_attr/rcut", dtype=GLOBAL_TF_FLOAT_PRECISION
+                self.rcut,
+                name="descrpt_attr%s/rcut" % suffix,
+                dtype=GLOBAL_TF_FLOAT_PRECISION,
             )
-            tf.constant(self.ntypes, name="descrpt_attr/ntypes", dtype=tf.int32)
-            feed_dict = self.descrpt.get_feed_dict(coord_, atype_, natoms, box, mesh)
-            return_elements = [*self.descrpt.get_tensor_names(), "o_descriptor:0"]
+            tf.constant(
+                self.ntypes, name="descrpt_attr%s/ntypes" % suffix, dtype=tf.int32
+            )
+            if "global_feed_dict" in input_dict:
+                feed_dict = input_dict["global_feed_dict"]
+            else:
+                extra_feed_dict = {}
+                if "fparam" in input_dict:
+                    extra_feed_dict["fparam"] = input_dict["fparam"]
+                if "aparam" in input_dict:
+                    extra_feed_dict["aparam"] = input_dict["aparam"]
+                feed_dict = self.get_feed_dict(
+                    coord_, atype_, natoms, box, mesh, **extra_feed_dict
+                )
+            return_elements = [
+                *self.descrpt.get_tensor_names(suffix=suffix),
+                "o_descriptor%s:0" % suffix,
+            ]
             if frz_model is not None:
                 imported_tensors = self._import_graph_def_from_frz_model(
                     frz_model, feed_dict, return_elements
@@ -177,3 +194,310 @@ class Model(ABC):
         return tf.import_graph_def(
             sub_graph_def, input_map=feed_dict, return_elements=return_elements, name=""
         )
+
+    def enable_mixed_precision(self, mixed_prec: dict):
+        """Enable mixed precision for the model.
+
+        Parameters
+        ----------
+        mixed_prec : dict
+            The mixed precision config
+        """
+        raise RuntimeError("Not supported")
+
+    def change_energy_bias(
+        self,
+        data: DeepmdDataSystem,
+        frozen_model: str,
+        origin_type_map: list,
+        full_type_map: str,
+        bias_shift: str = "delta",
+    ) -> None:
+        """Change the energy bias according to the input data and the pretrained model.
+
+        Parameters
+        ----------
+        data : DeepmdDataSystem
+            The training data.
+        frozen_model : str
+            The path file of frozen model.
+        origin_type_map : list
+            The original type_map in dataset, they are targets to change the energy bias.
+        full_type_map : str
+            The full type_map in pretrained model
+        bias_shift : str
+            The mode for changing energy bias : ['delta', 'statistic']
+            'delta' : perform predictions on energies of target dataset,
+                    and do least sqaure on the errors to obtain the target shift as bias.
+            'statistic' : directly use the statistic energy bias in the target dataset.
+        """
+        raise RuntimeError("Not supported")
+
+    def enable_compression(self, suffix: str = ""):
+        """Enable compression.
+
+        Parameters
+        ----------
+        suffix : str
+            suffix to name scope
+        """
+        raise RuntimeError("Not supported")
+
+    def get_numb_fparam(self) -> Union[int, dict]:
+        """Get the number of frame parameters."""
+        return 0
+
+    def get_numb_aparam(self) -> Union[int, dict]:
+        """Get the number of atomic parameters."""
+        return 0
+
+    def get_numb_dos(self) -> Union[int, dict]:
+        """Get the number of gridpoints in energy space."""
+        return 0
+
+    @abstractmethod
+    def get_fitting(self) -> Union[Fitting, dict]:
+        """Get the fitting(s)."""
+
+    @abstractmethod
+    def get_loss(self, loss: dict, lr) -> Optional[Union[Loss, dict]]:
+        """Get the loss function(s)."""
+
+    @abstractmethod
+    def get_rcut(self) -> float:
+        """Get cutoff radius of the model."""
+
+    @abstractmethod
+    def get_ntypes(self) -> int:
+        """Get the number of types."""
+
+    @abstractmethod
+    def data_stat(self, data: dict):
+        """Data staticis."""
+
+    def get_feed_dict(
+        self,
+        coord_: tf.Tensor,
+        atype_: tf.Tensor,
+        natoms: tf.Tensor,
+        box: tf.Tensor,
+        mesh: tf.Tensor,
+        **kwargs,
+    ) -> Dict[str, tf.Tensor]:
+        """Generate the feed_dict for current descriptor.
+
+        Parameters
+        ----------
+        coord_ : tf.Tensor
+            The coordinate of atoms
+        atype_ : tf.Tensor
+            The type of atoms
+        natoms : tf.Tensor
+            The number of atoms. This tensor has the length of Ntypes + 2
+            natoms[0]: number of local atoms
+            natoms[1]: total number of atoms held by this processor
+            natoms[i]: 2 <= i < Ntypes+2, number of type i atoms
+        box : tf.Tensor
+            The box. Can be generated by deepmd.model.make_stat_input
+        mesh : tf.Tensor
+            For historical reasons, only the length of the Tensor matters.
+            if size of mesh == 6, pbc is assumed.
+            if size of mesh == 0, no-pbc is assumed.
+        **kwargs : dict
+            The additional arguments
+
+        Returns
+        -------
+        feed_dict : dict[str, tf.Tensor]
+            The output feed_dict of current descriptor
+        """
+        feed_dict = {
+            "t_coord:0": coord_,
+            "t_type:0": atype_,
+            "t_natoms:0": natoms,
+            "t_box:0": box,
+            "t_mesh:0": mesh,
+        }
+        if kwargs.get("fparam") is not None:
+            feed_dict["t_fparam:0"] = kwargs["fparam"]
+        if kwargs.get("aparam") is not None:
+            feed_dict["t_aparam:0"] = kwargs["aparam"]
+        return feed_dict
+
+    @classmethod
+    @abstractmethod
+    def update_sel(cls, global_jdata: dict, local_jdata: dict) -> dict:
+        """Update the selection and perform neighbor statistics.
+
+        Notes
+        -----
+        Do not modify the input data without copying it.
+
+        Parameters
+        ----------
+        global_jdata : dict
+            The global data, containing the training section
+        local_jdata : dict
+            The local data refer to the current class
+
+        Returns
+        -------
+        dict
+            The updated local data
+        """
+        cls = cls.get_class_by_input(local_jdata)
+        return cls.update_sel(global_jdata, local_jdata)
+
+
+class StandardModel(Model):
+    """Standard model, which must contain a descriptor and a fitting.
+
+    Parameters
+    ----------
+    descriptor : Union[dict, Descriptor]
+        The descriptor
+    fitting_net : Union[dict, Fitting]
+        The fitting network
+    type_embedding : dict, optional
+        The type embedding
+    type_map : list of dict, optional
+        The type map
+    """
+
+    def __new__(cls, *args, **kwargs):
+        from .dos import DOSModel
+        from .ener import EnerModel
+        from .tensor import DipoleModel
+        from .tensor import PolarModel
+
+        if cls is StandardModel:
+            fitting_type = kwargs["fitting_net"]["type"]
+            # init model
+            # infer model type by fitting_type
+            if fitting_type == "ener":
+                cls = EnerModel
+            elif fitting_type == "dos":
+                cls = DOSModel
+            elif fitting_type == "dipole":
+                cls = DipoleModel
+            elif fitting_type == "polar":
+                cls = PolarModel
+            else:
+                raise RuntimeError("get unknown fitting type when building model")
+            return cls.__new__(cls)
+        return super().__new__(cls)
+
+    def __init__(
+        self,
+        descriptor: Union[dict, Descriptor],
+        fitting_net: Union[dict, Fitting],
+        type_embedding: Optional[Union[dict, TypeEmbedNet]] = None,
+        type_map: Optional[List[str]] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            descriptor=descriptor, fitting=fitting_net, type_map=type_map, **kwargs
+        )
+        if isinstance(descriptor, Descriptor):
+            self.descrpt = descriptor
+        else:
+            self.descrpt = Descriptor(
+                **descriptor, ntypes=len(self.get_type_map()), spin=self.spin
+            )
+
+        if isinstance(fitting_net, Fitting):
+            self.fitting = fitting_net
+        else:
+            self.fitting = Fitting(**fitting_net, descrpt=self.descrpt, spin=self.spin)
+        self.rcut = self.descrpt.get_rcut()
+        self.ntypes = self.descrpt.get_ntypes()
+
+        # type embedding
+        if type_embedding is not None and isinstance(type_embedding, TypeEmbedNet):
+            self.typeebd = type_embedding
+        elif type_embedding is not None:
+            self.typeebd = TypeEmbedNet(
+                **type_embedding,
+                padding=self.descrpt.explicit_ntypes,
+            )
+        elif self.descrpt.explicit_ntypes:
+            default_args = type_embedding_args()
+            default_args_dict = {i.name: i.default for i in default_args}
+            default_args_dict["activation_function"] = None
+            self.typeebd = TypeEmbedNet(
+                **default_args_dict,
+                padding=True,
+            )
+        else:
+            self.typeebd = None
+
+    def enable_mixed_precision(self, mixed_prec: dict):
+        """Enable mixed precision for the model.
+
+        Parameters
+        ----------
+        mixed_prec : dict
+            The mixed precision config
+        """
+        self.descrpt.enable_mixed_precision(mixed_prec)
+        self.fitting.enable_mixed_precision(mixed_prec)
+
+    def enable_compression(self, suffix: str = ""):
+        """Enable compression.
+
+        Parameters
+        ----------
+        suffix : str
+            suffix to name scope
+        """
+        graph, graph_def = load_graph_def(self.compress["model_file"])
+        self.descrpt.enable_compression(
+            self.compress["min_nbor_dist"],
+            graph,
+            graph_def,
+            self.compress["table_config"][0],
+            self.compress["table_config"][1],
+            self.compress["table_config"][2],
+            self.compress["table_config"][3],
+            suffix=suffix,
+        )
+        # for fparam or aparam settings in 'ener' type fitting net
+        self.fitting.init_variables(graph, graph_def, suffix=suffix)
+        if (
+            self.typeebd is not None
+            and self.typeebd.type_embedding_net_variables is None
+        ):
+            self.typeebd.init_variables(graph, graph_def, suffix=suffix)
+
+    def get_fitting(self) -> Union[Fitting, dict]:
+        """Get the fitting(s)."""
+        return self.fitting
+
+    def get_loss(self, loss: dict, lr) -> Union[Loss, dict]:
+        """Get the loss function(s)."""
+        return self.fitting.get_loss(loss, lr)
+
+    def get_rcut(self) -> float:
+        """Get cutoff radius of the model."""
+        return self.rcut
+
+    def get_ntypes(self) -> int:
+        """Get the number of types."""
+        return self.ntypes
+
+    @classmethod
+    def update_sel(cls, global_jdata: dict, local_jdata: dict):
+        """Update the selection and perform neighbor statistics.
+
+        Parameters
+        ----------
+        global_jdata : dict
+            The global data, containing the training section
+        local_jdata : dict
+            The local data refer to the current class
+        """
+        local_jdata_cpy = local_jdata.copy()
+        local_jdata_cpy["descriptor"] = Descriptor.update_sel(
+            global_jdata, local_jdata["descriptor"]
+        )
+        return local_jdata_cpy

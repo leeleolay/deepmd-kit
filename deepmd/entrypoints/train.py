@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """DeePMD training entrypoint script.
 
 Can handle local or distributed training.
@@ -59,9 +60,9 @@ def train(
     INPUT : str
         json/yaml control file
     init_model : Optional[str]
-        path to checkpoint folder or None
+        path prefix of checkpoint files or None
     restart : Optional[str]
-        path to checkpoint folder or None
+        path prefix of checkpoint files or None
     output : str
         path for dump file with arguments
     init_frz_model : str
@@ -234,6 +235,9 @@ def _do_work(jdata: Dict[str, Any], run_opt: RunOptions, is_compress: bool = Fal
                         valid_data[data_systems].print_summary(
                             f"validation in {data_systems}"
                         )
+    else:
+        if modifier is not None:
+            modifier.build_fv_graph()
 
     # get training info
     stop_batch = j_must_have(jdata["training"], "numb_steps")
@@ -325,6 +329,11 @@ def get_modifier(modi_data=None):
 
 
 def get_rcut(jdata):
+    if jdata["model"].get("type") == "pairwise_dprc":
+        return max(
+            jdata["model"]["qm_model"]["descriptor"]["rcut"],
+            jdata["model"]["qmmm_model"]["descriptor"]["rcut"],
+        )
     descrpt_data = jdata["model"]["descriptor"]
     rcut_list = []
     if descrpt_data["type"] == "hybrid":
@@ -340,7 +349,10 @@ def get_type_map(jdata):
 
 
 def get_nbor_stat(jdata, rcut, one_type: bool = False):
-    max_rcut = get_rcut(jdata)
+    # it seems that DeepmdDataSystem does not need rcut
+    # it's not clear why there is an argument...
+    # max_rcut = get_rcut(jdata)
+    max_rcut = rcut
     type_map = get_type_map(jdata)
 
     if type_map and len(type_map) == 0:
@@ -366,9 +378,7 @@ def get_nbor_stat(jdata, rcut, one_type: bool = False):
             tmp_data.get_batch()
             assert (
                 tmp_data.get_type_map()
-            ), "In multi-task mode, 'type_map.raw' must be defined in data systems {}! ".format(
-                systems
-            )
+            ), f"In multi-task mode, 'type_map.raw' must be defined in data systems {systems}! "
             if train_data is None:
                 train_data = tmp_data
             else:
@@ -389,17 +399,7 @@ def get_nbor_stat(jdata, rcut, one_type: bool = False):
     min_nbor_dist, max_nbor_size = neistat.get_stat(
         train_data
     )  # 0.8854385688525511, [38 72]
-    # paddle: 0.8854385614395142 [38 72]
 
-    # moved from traier.py as duplicated
-    # TODO: this is a simple fix but we should have a clear
-    #       architecture to call neighbor stat
-    # tf.constant(
-    #     min_nbor_dist,
-    #     name="train_attr/min_nbor_dist",
-    #     dtype=GLOBAL_ENER_FLOAT_PRECISION,
-    # )
-    # tf.constant(max_nbor_size, name="train_attr/max_nbor_size", dtype=tf.int32)
     return min_nbor_dist, max_nbor_size
 
 
@@ -414,7 +414,7 @@ def get_min_nbor_dist(jdata, rcut):
 
 
 def parse_auto_sel(sel):
-    if type(sel) is not str:
+    if not isinstance(sel, str):
         return False
     words = sel.split(":")
     if words[0] == "auto":
@@ -441,9 +441,7 @@ def wrap_up_4(xx):
     return 4 * ((int(xx) + 3) // 4)
 
 
-def update_one_sel(jdata, descriptor):
-    if descriptor["type"] == "loc_frame":
-        return descriptor
+def update_one_sel(jdata, descriptor, one_type: bool = False):
     rcut = descriptor["rcut"]
     tmp_sel = get_sel(
         jdata, rcut, one_type=descriptor["type"] in ("se_atten",)
@@ -466,25 +464,7 @@ def update_one_sel(jdata, descriptor):
                     "not less than %d, but you set it to %d. The accuracy"
                     " of your model may get worse." % (ii, tt, dd)
                 )
-    """
-    descriptor:
-    {
-        'type': 'se_e2_a',
-        'sel': [46, 92],
-        'rcut_smth': 0.5,
-        'rcut': 6.0,
-        'neuron': [25, 50, 100],
-        'resnet_dt': False,
-        'axis_neuron': 16,
-        'seed': 1,
-        'activation_function': 'tanh',
-        'type_one_side': False,
-        'precision': 'default',
-        'trainable': True,
-        'exclude_types': [],
-        'set_davg_zero': False
-    }
-    """
+
     if descriptor["type"] in ("se_atten",):
         descriptor["sel"] = sel = sum(sel)
     return descriptor

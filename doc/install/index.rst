@@ -11,3 +11,5 @@ Installation
    install-ipi
    install-gromacs
    build-conda
+   install-nodejs
+   easy-install-dev

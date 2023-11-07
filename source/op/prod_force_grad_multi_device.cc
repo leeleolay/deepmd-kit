@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
 #include "custom_op.h"
 #include "prod_force_grad.h"
 
@@ -69,8 +70,8 @@ class ProdForceSeAGradOp : public OpKernel {
 
     int nframes = net_deriv_tensor.shape().dim_size(0);
     int nloc = natoms(0);
-    int ndescrpt = net_deriv_tensor.shape().dim_size(1) / nloc;
-    int nnei = nlist_tensor.shape().dim_size(1) / nloc;
+    int ndescrpt = nloc > 0 ? net_deriv_tensor.shape().dim_size(1) / nloc : 0;
+    int nnei = nloc > 0 ? nlist_tensor.shape().dim_size(1) / nloc : 0;
 
     // check the sizes
     OP_REQUIRES(context, (nframes == grad_shape.dim_size(0)),
@@ -119,25 +120,14 @@ class ProdForceSeAGradOp : public OpKernel {
     const FPTYPE* p_in_deriv = in_deriv_tensor.flat<FPTYPE>().data();
     const int* p_nlist = nlist_tensor.flat<int>().data();
 
-    for (int_64 kk = 0; kk < nframes; ++kk) {
-      FPTYPE* grad_net = p_grad_net + kk * nloc * ndescrpt;
-      const FPTYPE* grad = p_grad + kk * nloc * 3;
-      const FPTYPE* in_deriv = p_in_deriv + kk * nloc * ndescrpt * 3;
-      const int* nlist = p_nlist + kk * nloc * nnei;
-      if (device == "GPU") {
-#if GOOGLE_CUDA
-        deepmd::prod_force_grad_a_gpu_cuda(grad_net, grad, in_deriv, nlist,
-                                           nloc, nnei);
-#endif  // GOOGLE_CUDA
-
-#if TENSORFLOW_USE_ROCM
-        deepmd::prod_force_grad_a_gpu_rocm(grad_net, grad, in_deriv, nlist,
-                                           nloc, nnei);
-#endif  // TENSORFLOW_USE_ROCM
-      } else if (device == "CPU") {
-        deepmd::prod_force_grad_a_cpu(grad_net, grad, in_deriv, nlist, nloc,
-                                      nnei);
-      }
+    if (device == "GPU") {
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+      deepmd::prod_force_grad_a_gpu(p_grad_net, p_grad, p_in_deriv, p_nlist,
+                                    nloc, nnei, nframes);
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+    } else if (device == "CPU") {
+      deepmd::prod_force_grad_a_cpu(p_grad_net, p_grad, p_in_deriv, p_nlist,
+                                    nloc, nnei, nframes);
     }
   }
 
@@ -190,8 +180,8 @@ class ProdForceSeRGradOp : public OpKernel {
 
     int nframes = net_deriv_tensor.shape().dim_size(0);
     int nloc = natoms(0);
-    int ndescrpt = net_deriv_tensor.shape().dim_size(1) / nloc;
-    int nnei = nlist_tensor.shape().dim_size(1) / nloc;
+    int ndescrpt = nloc > 0 ? net_deriv_tensor.shape().dim_size(1) / nloc : 0;
+    int nnei = nloc > 0 ? nlist_tensor.shape().dim_size(1) / nloc : 0;
 
     // check the sizes
     OP_REQUIRES(context, (nframes == grad_shape.dim_size(0)),
@@ -238,26 +228,14 @@ class ProdForceSeRGradOp : public OpKernel {
     const FPTYPE* p_in_deriv = in_deriv_tensor.flat<FPTYPE>().data();
     const int* p_nlist = nlist_tensor.flat<int>().data();
 
-    // loop over frames
-    for (int_64 kk = 0; kk < nframes; ++kk) {
-      FPTYPE* grad_net = p_grad_net + kk * nloc * ndescrpt;
-      const FPTYPE* grad = p_grad + kk * nloc * 3;
-      const FPTYPE* in_deriv = p_in_deriv + kk * nloc * ndescrpt * 3;
-      const int* nlist = p_nlist + kk * nloc * nnei;
-      if (device == "GPU") {
-#if GOOGLE_CUDA
-        deepmd::prod_force_grad_r_gpu_cuda(grad_net, grad, in_deriv, nlist,
-                                           nloc, nnei);
-#endif  // GOOGLE_CUDA
-
-#if TENSORFLOW_USE_ROCM
-        deepmd::prod_force_grad_r_gpu_rocm(grad_net, grad, in_deriv, nlist,
-                                           nloc, nnei);
-#endif  // TENSORFLOW_USE_ROCM
-      } else if (device == "CPU") {
-        deepmd::prod_force_grad_r_cpu(grad_net, grad, in_deriv, nlist, nloc,
-                                      nnei);
-      }
+    if (device == "GPU") {
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+      deepmd::prod_force_grad_r_gpu(p_grad_net, p_grad, p_in_deriv, p_nlist,
+                                    nloc, nnei, nframes);
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+    } else if (device == "CPU") {
+      deepmd::prod_force_grad_r_cpu(p_grad_net, p_grad, p_in_deriv, p_nlist,
+                                    nloc, nnei, nframes);
     }
   }
 

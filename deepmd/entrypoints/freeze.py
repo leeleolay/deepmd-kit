@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """Script for freezing TF trained graph so it can be used with LAMMPS and i-PI.
 
 References
@@ -196,6 +197,7 @@ def _make_node_names(
         "model_attr/model_version",
         "train_attr/min_nbor_dist",
         "train_attr/training_script",
+        "t_mesh",
     ]
 
     if model_type == "ener":
@@ -208,6 +210,7 @@ def _make_node_names(
             "spin_attr/ntypes_spin",
             "fitting_attr/dfparam",
             "fitting_attr/daparam",
+            "fitting_attr/aparam_nall",
         ]
     elif model_type == "dos":
         nodes += [
@@ -531,78 +534,7 @@ def freeze(
     **kwargs
         other arguments
     """
-    # We retrieve our checkpoint fullpath
-    # checkpoint = tf.train.get_checkpoint_state(checkpoint_folder)
-    # input_checkpoint = checkpoint.model_checkpoint_path
-
-    # # expand the output file to full path
-    # output_graph = abspath(output)
-
-    # # Before exporting our graph, we need to precise what is our output node
-    # # This is how TF decides what part of the Graph he has to keep
-    # # and what part it can dump
-    # # NOTE: this variable is plural, because you can have multiple output nodes
-    # # node_names = "energy_test,force_test,virial_test,t_rcut"
-
-    # # We clear devices to allow TensorFlow to control
-    # # on which device it will load operations
-    # clear_devices = True
-
-    # # We import the meta graph and retrieve a Saver
-    # try:
-    #     # In case paralle training
-    #     import horovod.tensorflow as _  # noqa: F401
-    # except ImportError:
-    #     pass
-    # saver = tf.train.import_meta_graph(
-    #     f"{input_checkpoint}.meta", clear_devices=clear_devices
-    # )
-
-    # # We retrieve the protobuf graph definition
-    # graph = tf.get_default_graph()
-    # try:
-    #     input_graph_def = graph.as_graph_def()
-    # except google.protobuf.message.DecodeError as e:
-    #     raise GraphTooLargeError(
-    #         "The graph size exceeds 2 GB, the hard limitation of protobuf."
-    #         " Then a DecodeError was raised by protobuf. You should "
-    #         "reduce the size of your model."
-    #     ) from e
-    # nodes = [n.name for n in input_graph_def.node]
-
-    # # We start a session and restore the graph weights
-    # with tf.Session() as sess:
-    #     saver.restore(sess, input_checkpoint)
-    #     model_type = run_sess(sess, "model_attr/model_type:0", feed_dict={}).decode(
-    #         "utf-8"
-    #     )
-    #     if "modifier_attr/type" in nodes:
-    #         modifier_type = run_sess(sess, "modifier_attr/type:0", feed_dict={}).decode(
-    #             "utf-8"
-    #         )
-    #     else:
-    #         modifier_type = None
-    #     if nvnmd_weight is not None:
-    #         save_weight(sess, nvnmd_weight)  # nvnmd
-    # if model_type != "multi_task":
     freeze_graph(
         input_file,
         output,
-        # sess,
-        # input_graph_def,
-        # nodes,
-        # model_type,
-        # modifier_type,
-        # output_graph,
-        # node_names,
     )
-    # else:
-    #     freeze_graph_multi(
-    #         sess,
-    #         input_graph_def,
-    #         nodes,
-    #         modifier_type,
-    #         output_graph,
-    #         node_names,
-    #         united_model=united_model,
-    #     )

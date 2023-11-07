@@ -6,6 +6,28 @@ The method of DPLR is described in [this paper][1]. One is recommended to read t
 
 In the following, we take the DPLR model for example to introduce the training and LAMMPS simulation with the DPLR model. The DPLR model is trained in two steps.
 
+## Theory
+
+The Deep Potential Long Range (DPLR) model adds the electrostatic energy to the total energy:
+```math
+    E=E_{\text{DP}} + E_{\text{ele}},
+```
+where $E_{\text{DP}}$ is the short-range contribution constructed as the [standard energy model](./train-energy.md) that is fitted against $(E^\ast-E_{\text{ele}})$.
+$E_{\text{ele}}$ is the electrostatic energy
+introduced by a group of Gaussian distributions that is an approximation of the electronic structure of the system, and is calculated in Fourier space by
+```math
+    E_{\text{ele}} = \frac{1}{2\pi V}\sum_{m \neq 0, \|m\|\leq L} \frac{\exp({-\pi ^2 m^2/\beta ^2})}{m^2}S^2(m),
+```
+where $\beta$ is a freely tunable parameter that controls the spread of the Gaussians.
+$L$ is the cutoff in Fourier space and $S(m)$, the structure factor, is given by
+```math
+    S(m)=\sum_i q_i e^{-2\pi \imath m \boldsymbol r_i} + \sum_n q_n e^{-2\pi \imath m \boldsymbol W_n},
+```
+where $\imath = \sqrt{-1}$ denotes the imaginary unit, $\boldsymbol r_i$ indicates ion coordinates, $q_i$ is the charge of the ion $i$, and $W_n$ is the $n$-th Wannier centroid (WC) which can be obtained from a separated [dipole model](./train-fitting-tensor.md).
+It can be proved that the error in the electrostatic energy introduced by the Gaussian approximations is dominated by a summation of dipole-quadrupole interactions that decay as $r^{-4}$, where $r$ is the distance between the dipole and quadrupole.[^1]
+
+[^1]: This section is built upon Jinzhe Zeng, Duo Zhang, Denghui Lu, Pinghui Mo, Zeyu Li, Yixiao Chen,  Marián Rynik, Li'ang Huang, Ziyao Li, Shaochen Shi, Yingze Wang, Haotian Ye, Ping Tuo, Jiabin Yang, Ye Ding, Yifan Li, Davide Tisi, Qiyu Zeng, Han Bao, Yu Xia, Jiameng Huang, Koki Muraoka, Yibo Wang, Junhan Chang, Fengbo Yuan, Sigbjørn Løland Bore, Chun Cai, Yinnian Lin, Bo Wang, Jiayan Xu, Jia-Xin Zhu, Chenxing Luo, Yuzhi Zhang, Rhys E. A. Goodall, Wenshuo Liang, Anurag Kumar Singh, Sikai Yao, Jingchao Zhang, Renata Wentzcovitch, Jiequn Han, Jie Liu, Weile Jia, Darrin M. York, Weinan E, Roberto Car, Linfeng Zhang, Han Wang, [J. Chem. Phys. 159, 054801 (2023)](https://doi.org/10.1063/5.0155600) licensed under a [Creative Commons Attribution (CC BY) license](http://creativecommons.org/licenses/by/4.0/).
+
 ## Train a deep Wannier model for Wannier centroids
 
 We use the deep Wannier model (DW) to represent the relative position of the Wannier centroid (WC) with the atom with which it is associated. One may consult the introduction of the [dipole model](train-fitting-tensor.md) for a detailed introduction. An example input `wc.json` and a small dataset `data` for tutorial purposes can be found in
@@ -133,6 +155,33 @@ kspace_modify	gewald ${BETA} diff ik mesh ${KMESH} ${KMESH} ${KMESH}
 ```
 The long-range part is calculated by the `kspace` support of LAMMPS. The `kspace_style` `pppm/dplr` is required. The spread parameter set by variable `BETA` should be set the same as that used in training. The `KMESH` should be set dense enough so the long-range calculation is converged.
 
+### fix dplr command
+
+**Syntax**
+
+
+```
+fix ID group-ID style_name keyword value ...
+```
+* ID, group-ID are documented in :doc:`fix <fix>` command
+* style_name = *dplr*
+* three or more keyword/value pairs may be appended
+
+```
+keyword = *model* or *type_associate* or *bond_type* or *efield*
+  *model* value = name
+    name = name of DPLR model file (e.g. frozen_model.pb) (not DW model)
+  *type_associate* values = NR1 NW1 NR2 NW2 ...
+    NRi = type of real atom in i-th (real atom, Wannier centroid) pair
+    NWi = type of Wannier in i-th (real atom, Wannier centroid) pair
+  *bond_type* values = NB1 NB2 ...
+    NBi = bond type of i-th (real atom, Wannier centroid) pair
+  *efield* (optional) values = Ex Ey Ez
+    Ex/Ey/Ez = electric field along x/y/z direction
+```
+
+**Examples**
+
 ```lammps
 # "fix dplr" set the position of the virtual atom, and spread the
 # electrostatic interaction asserting on the virtual atom to the real
@@ -142,8 +191,19 @@ The long-range part is calculated by the `kspace` support of LAMMPS. The `kspace
 fix		0 all dplr model ener.pb type_associate 1 3 bond_type 1
 fix_modify	0 virial yes
 ```
+
 The fix command `dplr` calculates the position of WCs by the DW model and back-propagates the long-range interaction on virtual atoms to real toms.
-At this time, the training parameter {ref}`type_map <model/type_map>` will be mapped to LAMMPS atom types.
+The atom names specified in [pair_style `deepmd`](../third-party/lammps-command.md#pair_style-deepmd) will be used to determine elements.
+If it is not set, the training parameter {ref}`type_map <model/type_map>` will be mapped to LAMMPS atom types.
+
+To use a time-dependent electric field, LAMMPS's `variable` feature can be utilized:
+```lammps
+variable EFIELD_Z equal 2*sin(2*PI*time/0.006)
+fix 0 all dplr model ener.pb type_associate 1 3 bond_type 1 efield 0 0 v_EFIELD_Z
+fix_modify 0 energy yes virial yes
+```
+
+The `efield` feature of `fix dplr` behaves similarly to LAMMPS's [fix efield](https://docs.lammps.org/fix_efield.html). Note that the atomic energy or potential in `fix efield` is not yet supported in `fix dplr`. For a detailed description on how a time-dependent variable can be defined, refer to [LAMMPS's document of variable](https://docs.lammps.org/variable.html).
 
 ```lammps
 # compute the temperature of real atoms, excluding virtual atom contribution

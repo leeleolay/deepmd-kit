@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import logging
 import os
 from typing import Callable
@@ -93,12 +94,14 @@ class AutoBatchSize:
         OutOfMemoryError
             OOM when batch size is 1
         """
+        if natoms > 0:
+            batch_nframes = self.current_batch_size // natoms
+        else:
+            batch_nframes = self.current_batch_size
         try:
-            # print(__file__, self.current_batch_size, natoms)
             n_batch, result = callable(
                 max(self.current_batch_size // natoms, 1), start_index
             )
-            # print(__file__, n_batch)
         except OutOfMemoryError as e:
             # TODO: it's very slow to catch OOM error; I don't know what TF is doing here
             # but luckily we only need to catch once
@@ -192,7 +195,6 @@ class AutoBatchSize:
                 for rr in result:
                     rr.reshape((n_batch, -1))
                 results.append(result)
-        # print(__file__, "here")
 
         r = tuple([np.concatenate(r, axis=0) for r in zip(*results)])
         if len(r) == 1:

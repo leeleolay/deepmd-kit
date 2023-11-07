@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
 #include "custom_op.h"
 #include "errors.h"
 #include "prod_force.h"
@@ -49,12 +50,15 @@ template <typename Device, typename FPTYPE>
 class ProdForceSeAOp : public OpKernel {
  public:
   explicit ProdForceSeAOp(OpKernelConstruction* context) : OpKernel(context) {
-    if (context->HasAttr("parallel"))
+    if (context->HasAttr("parallel")) {
       OP_REQUIRES_OK(context, context->GetAttr("parallel", &parallel));
-    if (context->HasAttr("start_frac"))
+    }
+    if (context->HasAttr("start_frac")) {
       OP_REQUIRES_OK(context, context->GetAttr("start_frac", &start_frac));
-    if (context->HasAttr("end_frac"))
+    }
+    if (context->HasAttr("end_frac")) {
       OP_REQUIRES_OK(context, context->GetAttr("end_frac", &end_frac));
+    }
   }
 
   void Compute(OpKernelContext* context) override {
@@ -85,8 +89,8 @@ class ProdForceSeAOp : public OpKernel {
     int nloc = natoms[0];
     int nall = natoms[1];
     int nframes = net_deriv_tensor.shape().dim_size(0);
-    int ndescrpt = net_deriv_tensor.shape().dim_size(1) / nloc;
-    int nnei = nlist_tensor.shape().dim_size(1) / nloc;
+    int ndescrpt = nloc > 0 ? net_deriv_tensor.shape().dim_size(1) / nloc : 0;
+    int nnei = nloc > 0 ? nlist_tensor.shape().dim_size(1) / nloc : 0;
     // check the sizes
     OP_REQUIRES(context, (nframes == in_deriv_tensor.shape().dim_size(0)),
                 errors::InvalidArgument("number of samples should match"));
@@ -124,9 +128,10 @@ class ProdForceSeAOp : public OpKernel {
 
     int start_index = 0, end_index = nloc, nloc_loc = nloc;
     if (parallel) {
-      if (device != "CPU")
+      if (device != "CPU") {
         throw deepmd::deepmd_exception(
             "Auto parallelization for ProdForceA is not supported on GPUs!");
+      }
       // we split in_deriv, net_deriv, and nlist along nloc
       // compute start and end index along nloc
       // frac belongs to [0, 1]
@@ -136,25 +141,15 @@ class ProdForceSeAOp : public OpKernel {
       nloc_loc = end_index - start_index;
     }
 
-    for (int_64 kk = 0; kk < nframes; ++kk) {
-      FPTYPE* force = p_force + kk * nall * 3;
-      const FPTYPE* net_deriv = p_net_deriv + kk * nloc * ndescrpt;
-      const FPTYPE* in_deriv = p_in_deriv + kk * nloc * ndescrpt * 3;
-      const int* nlist = p_nlist + kk * nloc * nnei;
-      if (device == "GPU") {
-#if GOOGLE_CUDA
-        deepmd::prod_force_a_gpu_cuda(force, net_deriv, in_deriv, nlist, nloc,
-                                      nall, nnei);
-#endif  // GOOGLE_CUDA
-
-#if TENSORFLOW_USE_ROCM
-        deepmd::prod_force_a_gpu_rocm(force, net_deriv, in_deriv, nlist, nloc,
-                                      nall, nnei);
-#endif  // TENSORFLOW_USE_ROCM
-      } else if (device == "CPU") {
-        deepmd::prod_force_a_cpu(force, net_deriv, in_deriv, nlist, nloc_loc,
-                                 nall, nnei, start_index = start_index);
-      }
+    if (device == "GPU") {
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+      deepmd::prod_force_a_gpu(p_force, p_net_deriv, p_in_deriv, p_nlist, nloc,
+                               nall, nnei, nframes);
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+    } else if (device == "CPU") {
+      deepmd::prod_force_a_cpu(p_force, p_net_deriv, p_in_deriv, p_nlist, nloc,
+                               nall, nnei, nframes, nloc_loc,
+                               start_index = start_index);
     }
   }
 
@@ -192,8 +187,8 @@ class ProdForceSeROp : public OpKernel {
     int nloc = natoms[0];
     int nall = natoms[1];
     int nframes = net_deriv_tensor.shape().dim_size(0);
-    int ndescrpt = net_deriv_tensor.shape().dim_size(1) / nloc;
-    int nnei = nlist_tensor.shape().dim_size(1) / nloc;
+    int ndescrpt = nloc > 0 ? net_deriv_tensor.shape().dim_size(1) / nloc : 0;
+    int nnei = nloc > 0 ? nlist_tensor.shape().dim_size(1) / nloc : 0;
     // check the sizes
     OP_REQUIRES(context, (nframes == in_deriv_tensor.shape().dim_size(0)),
                 errors::InvalidArgument("number of samples should match"));
@@ -227,25 +222,14 @@ class ProdForceSeROp : public OpKernel {
     const FPTYPE* p_in_deriv = in_deriv_tensor.flat<FPTYPE>().data();
     const int* p_nlist = nlist_tensor.flat<int>().data();
 
-    for (int_64 kk = 0; kk < nframes; ++kk) {
-      FPTYPE* force = p_force + kk * nall * 3;
-      const FPTYPE* net_deriv = p_net_deriv + kk * nloc * ndescrpt;
-      const FPTYPE* in_deriv = p_in_deriv + kk * nloc * ndescrpt * 3;
-      const int* nlist = p_nlist + kk * nloc * nnei;
-      if (device == "GPU") {
-#if GOOGLE_CUDA
-        deepmd::prod_force_r_gpu_cuda(force, net_deriv, in_deriv, nlist, nloc,
-                                      nall, nnei);
-#endif  // GOOGLE_CUDA
-
-#if TENSORFLOW_USE_ROCM
-        deepmd::prod_force_r_gpu_rocm(force, net_deriv, in_deriv, nlist, nloc,
-                                      nall, nnei);
-#endif  // TENSORFLOW_USE_ROCM
-      } else if (device == "CPU") {
-        deepmd::prod_force_r_cpu(force, net_deriv, in_deriv, nlist, nloc, nall,
-                                 nnei);
-      }
+    if (device == "GPU") {
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+      deepmd::prod_force_r_gpu(p_force, p_net_deriv, p_in_deriv, p_nlist, nloc,
+                               nall, nnei, nframes);
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+    } else if (device == "CPU") {
+      deepmd::prod_force_r_cpu(p_force, p_net_deriv, p_in_deriv, p_nlist, nloc,
+                               nall, nnei, nframes);
     }
   }
 

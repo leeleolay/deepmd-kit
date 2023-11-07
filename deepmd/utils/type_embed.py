@@ -84,6 +84,7 @@ class TypeEmbedNet:
         seed: Optional[int] = None,
         uniform_seed: bool = False,
         padding: bool = False,
+        **kwargs,
     ) -> None:
         """Constructor."""
         self.neuron = neuron
@@ -94,7 +95,9 @@ class TypeEmbedNet:
         self.trainable = trainable
         self.uniform_seed = uniform_seed
         self.type_embedding_net_variables = None
+        self.type_embedding_from_graph = None
         self.padding = padding
+        self.model_type = None
 
     def build(
         self,
@@ -118,13 +121,21 @@ class TypeEmbedNet:
         embedded_types
             The computational graph for embedded types
         """
-        types = tf.convert_to_tensor([ii for ii in range(ntypes)], dtype=tf.int32)
+        if self.model_type is not None and self.model_type == "compressed_model":
+            return self.type_embedding_from_graph
+        types = tf.convert_to_tensor(list(range(ntypes)), dtype=tf.int32)
         ebd_type = tf.cast(
             tf.one_hot(tf.cast(types, dtype=tf.int32), int(ntypes)),
             self.filter_precision,
         )
         ebd_type = tf.reshape(ebd_type, [-1, ntypes])
         name = "type_embed_net" + suffix
+        if (
+            nvnmd_cfg.enable
+            and (nvnmd_cfg.version == 1)
+            and (nvnmd_cfg.restore_descriptor or nvnmd_cfg.restore_fitting_net)
+        ):
+            self.type_embedding_net_variables = nvnmd_cfg.get_dp_init_weights()
         with tf.variable_scope(name, reuse=reuse):
             ebd_type = embedding_net(
                 ebd_type,
@@ -149,6 +160,7 @@ class TypeEmbedNet:
         graph: tf.Graph,
         graph_def: tf.GraphDef,
         suffix="",
+        model_type="original_model",
     ) -> None:
         """Init the type embedding net variables with the given dict.
 
@@ -160,7 +172,12 @@ class TypeEmbedNet:
             The input frozen model graph_def
         suffix
             Name suffix to identify this descriptor
+        model_type
+            Indicator of whether this model is a compressed model
         """
+        self.model_type = model_type
         self.type_embedding_net_variables = (
             get_type_embedding_net_variables_from_graph_def(graph_def, suffix=suffix)
         )
+        type_embedding = get_tensor_by_name_from_graph(graph, "t_typeebd")
+        self.type_embedding_from_graph = tf.convert_to_tensor(type_embedding)

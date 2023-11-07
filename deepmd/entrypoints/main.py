@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """DeePMD-Kit entry point module."""
 
 import argparse
@@ -583,9 +584,10 @@ def main(args: Optional[List[str]] = None):
 
     Parameters
     ----------
-    args : List[str], optional
+    args : List[str] or argparse.Namespace, optional
         list of command line arguments, used to avoid calling from the subprocess,
-        as it is quite slow to import tensorflow
+        as it is quite slow to import tensorflow; if Namespace is given, it will
+        be used directly
 
     Raises
     ------
@@ -595,7 +597,8 @@ def main(args: Optional[List[str]] = None):
     if args is not None:
         clear_session()
 
-    args = parse_args(args=args)
+    if not isinstance(args, argparse.Namespace):
+        args = parse_args(args=args)
 
     # do not set log handles for None, it is useless
     # log handles for train will be set separatelly
@@ -625,6 +628,8 @@ def main(args: Optional[List[str]] = None):
         neighbor_stat(**dict_args)
     elif args.command == "train-nvnmd":  # nvnmd
         train_nvnmd(**dict_args)
+    elif args.command == "gui":
+        start_dpgui(**dict_args)
     elif args.command is None:
         pass
     else:

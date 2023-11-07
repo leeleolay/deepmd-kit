@@ -21,10 +21,12 @@ class EnerModel(Model, paddle.nn.Layer):
 
     Parameters
     ----------
-    descrpt
+    descriptor
             Descriptor
-    fitting
+    fitting_net
             Fitting net
+    type_embedding
+        Type embedding net
     type_map
             Mapping atom type to the name (str) of the type.
             For example `type_map[1]` gives the name of the type 1.
@@ -40,15 +42,21 @@ class EnerModel(Model, paddle.nn.Layer):
             The lower boundary of the interpolation between short-range tabulated interaction and DP. It is only required when `use_srtab` is provided.
     sw_rmin
             The upper boundary of the interpolation between short-range tabulated interaction and DP. It is only required when `use_srtab` is provided.
+    srtab_add_bias : bool
+        Whether add energy bias from the statistics of the data to short-range tabulated atomic energy. It only takes effect when `use_srtab` is provided.
+    spin
+        spin
+    data_stat_nsample
+        The number of training samples in a system to compute and change the energy bias.
     """
 
     model_type = "ener"
 
     def __init__(
         self,
-        descrpt,
-        fitting,
-        typeebd=None,
+        descriptor: dict,
+        fitting_net: dict,
+        type_embedding: Optional[Union[dict, TypeEmbedNet]] = None,
         type_map: Optional[List[str]] = None,
         data_stat_nbatch: int = 10,
         data_stat_protect: float = 1e-2,
@@ -56,37 +64,32 @@ class EnerModel(Model, paddle.nn.Layer):
         smin_alpha: Optional[float] = None,
         sw_rmin: Optional[float] = None,
         sw_rmax: Optional[float] = None,
+        srtab_add_bias: bool = True,
         spin: Optional[Spin] = None,
+        data_bias_nsample: int = 10,
+        **kwargs,
     ) -> None:
         super().__init__()
         # super(EnerModel, self).__init__(name_scope="EnerModel")
         """Constructor."""
-        # descriptor
-        self.descrpt = descrpt
-        self.rcut = self.descrpt.get_rcut()
-        self.ntypes = self.descrpt.get_ntypes()
-        # fitting
-        self.fitting = fitting
+        super().__init__(
+            descriptor=descriptor,
+            fitting_net=fitting_net,
+            type_embedding=type_embedding,
+            type_map=type_map,
+            data_stat_nbatch=data_stat_nbatch,
+            data_bias_nsample=data_bias_nsample,
+            data_stat_protect=data_stat_protect,
+            use_srtab=use_srtab,
+            smin_alpha=smin_alpha,
+            sw_rmin=sw_rmin,
+            sw_rmax=sw_rmax,
+            spin=spin,
+            srtab_add_bias=srtab_add_bias,
+            **kwargs,
+        )
         self.numb_fparam = self.fitting.get_numb_fparam()
-        # type embedding
-        self.typeebd = typeebd
-        # spin
-        self.spin = spin
-        # other inputs
-        if type_map is None:
-            self.type_map = []
-        else:
-            self.type_map = type_map
-        self.data_stat_nbatch = data_stat_nbatch
-        self.data_stat_protect = data_stat_protect
-        self.srtab_name = use_srtab
-        if self.srtab_name is not None:
-            self.srtab = PairTab(self.srtab_name)
-            self.smin_alpha = smin_alpha
-            self.sw_rmin = sw_rmin
-            self.sw_rmax = sw_rmax
-        else:
-            self.srtab = None
+        self.numb_aparam = self.fitting.get_numb_aparam()
 
         # self.type_map = " ".join(self.type_map)
         self.t_tmap = " ".join(self.type_map)
@@ -101,6 +104,14 @@ class EnerModel(Model, paddle.nn.Layer):
 
     def get_type_map(self):
         return self.type_map
+
+    def get_numb_fparam(self) -> int:
+        """Get the number of frame parameters."""
+        return self.numb_fparam
+
+    def get_numb_aparam(self) -> int:
+        """Get the number of atomic parameters."""
+        return self.numb_aparam
 
     def data_stat(self, data):
         all_stat = make_stat_input(data, self.data_stat_nbatch, merge_sys=False)
@@ -153,51 +164,13 @@ class EnerModel(Model, paddle.nn.Layer):
         suffix="",
         reuse=None,
     ):
-        # print(__file__, coord_.shape)
-        # print(__file__, atype_.shape)
-        # print(__file__, natoms.shape)
-        # print(__file__, box.shape)
-        # print(__file__, mesh.shape)
-        # for k, v in input_dict.items():
-        #     print(f"{__file__} {k} {v.shape}")
-
         if input_dict is None:
             input_dict = {}
-        # if self.srtab is not None:
-        #     tab_info, tab_data = self.srtab.get()
-        #     self.tab_info = tf.get_variable(
-        #         "t_tab_info",
-        #         tab_info.shape,
-        #         dtype=tf.float64,
-        #         trainable=False,
-        #         initializer=tf.constant_initializer(tab_info, dtype=tf.float64),
-        #     )
-        #     self.tab_data = tf.get_variable(
-        #         "t_tab_data",
-        #         tab_data.shape,
-        #         dtype=tf.float64,
-        #         trainable=False,
-        #         initializer=tf.constant_initializer(tab_data, dtype=tf.float64),
-        #     )
 
         coord = paddle.reshape(coord_, [-1, natoms[1] * 3])
         atype = paddle.reshape(atype_, [-1, natoms[1]])
         # input_dict["nframes"] = paddle.shape(coord)[0]  # 推理模型导出的时候注释掉这里，否则会报错
 
-        # type embedding if any
-        # if self.typeebd is not None:
-        #     type_embedding = self.typeebd.build(
-        #         self.ntypes,
-        #         reuse=reuse,
-        #         suffix=suffix,
-        #     )
-        #     input_dict["type_embedding"] = type_embedding
-        # spin if any
-        # if self.spin is not None:
-        #     type_spin = self.spin.build(
-        #         reuse=reuse,
-        #         suffix=suffix,
-        #     )
         input_dict["atype"] = atype_
 
         dout = self.descrpt(
@@ -207,55 +180,13 @@ class EnerModel(Model, paddle.nn.Layer):
             box,
             mesh,
             input_dict,
-            # frz_model=frz_model,
-            # ckpt_meta=ckpt_meta,
             suffix=suffix,
             reuse=reuse,
         )
-        # self.dout = dout
-
-        # if self.srtab is not None:
-        #     nlist, rij, sel_a, sel_r = self.descrpt.get_nlist()
-        #     nnei_a = np.cumsum(sel_a)[-1]
-        #     nnei_r = np.cumsum(sel_r)[-1]
 
         atom_ener = self.fitting(dout, natoms, input_dict, reuse=reuse, suffix=suffix)
         self.atom_ener = atom_ener
 
-        # if self.srtab is not None:
-        #     sw_lambda, sw_deriv = op_module.soft_min_switch(
-        #         atype,
-        #         rij,
-        #         nlist,
-        #         natoms,
-        #         sel_a=sel_a,
-        #         sel_r=sel_r,
-        #         alpha=self.smin_alpha,
-        #         rmin=self.sw_rmin,
-        #         rmax=self.sw_rmax,
-        #     )
-        #     inv_sw_lambda = 1.0 - sw_lambda
-        #     # NOTICE:
-        #     # atom energy is not scaled,
-        #     # force and virial are scaled
-        #     tab_atom_ener, tab_force, tab_atom_virial = op_module.pair_tab(
-        #         self.tab_info,
-        #         self.tab_data,
-        #         atype,
-        #         rij,
-        #         nlist,
-        #         natoms,
-        #         sw_lambda,
-        #         sel_a=sel_a,
-        #         sel_r=sel_r,
-        #     )
-        #     energy_diff = tab_atom_ener - tf.reshape(atom_ener, [-1, natoms[0]])
-        #     tab_atom_ener = tf.reshape(sw_lambda, [-1]) * tf.reshape(
-        #         tab_atom_ener, [-1]
-        #     )
-        #     atom_ener = tf.reshape(inv_sw_lambda, [-1]) * atom_ener
-        #     energy_raw = tab_atom_ener + atom_ener
-        # else:
         energy_raw = atom_ener
 
         nloc_atom = (
@@ -270,12 +201,6 @@ class EnerModel(Model, paddle.nn.Layer):
 
         force, virial, atom_virial = self.descrpt.prod_force_virial(atom_ener, natoms)
 
-        # if self.srtab is not None:
-        #     sw_force = op_module.soft_min_force(
-        #         energy_diff, sw_deriv, nlist, natoms, n_a_sel=nnei_a, n_r_sel=nnei_r
-        #     )
-        #     force = force + sw_force + tab_force
-
         force = paddle.reshape(force, [-1, 3 * natoms[1]])
         if self.spin is not None:
             # split and concatenate force to compute local atom force and magnetic force
@@ -288,64 +213,20 @@ class EnerModel(Model, paddle.nn.Layer):
 
         force = paddle.reshape(force, [-1, 3 * natoms[1]], name="o_force" + suffix)
 
-        # if self.srtab is not None:
-        #     sw_virial, sw_atom_virial = op_module.soft_min_virial(
-        #         energy_diff,
-        #         sw_deriv,
-        #         rij,
-        #         nlist,
-        #         natoms,
-        #         n_a_sel=nnei_a,
-        #         n_r_sel=nnei_r,
-        #     )
-        #     atom_virial = atom_virial + sw_atom_virial + tab_atom_virial
-        #     virial = (
-        #         virial
-        #         + sw_virial
-        #         + tf.sum(tf.reshape(tab_atom_virial, [-1, natoms[1], 9]), axis=1)
-        #     )
-
         virial = paddle.reshape(virial, [-1, 9], name="o_virial" + suffix)
         atom_virial = paddle.reshape(
             atom_virial, [-1, 9 * natoms[1]], name="o_atom_virial" + suffix
         )
 
         model_dict = {}
-        model_dict["energy"] = energy  # [5]
-        model_dict["force"] = force  # [5, 576]
-        model_dict["virial"] = virial  # [5, 9]
-        model_dict["atom_ener"] = energy_raw  # [5, 192]
-        model_dict["atom_virial"] = atom_virial  # [5, 1728]
-        model_dict["coord"] = coord  # [5, 576]
-        model_dict["atype"] = atype  # [5, 192]
+        model_dict["energy"] = energy
+        model_dict["force"] = force
+        model_dict["virial"] = virial
+        model_dict["atom_ener"] = energy_raw
+        model_dict["atom_virial"] = atom_virial
+        model_dict["coord"] = coord
+        model_dict["atype"] = atype
 
-        # model_dict["zdebug1"] = self.descrpt.descrpt
-        # model_dict["zdebug2"] = self.descrpt.descrpt_deriv
-        # model_dict["zdebug3"] = self.descrpt.rij
-        # model_dict["zdebug4"] = self.descrpt.nlist
-        # model_dict["zdebug5"] = self.descrpt.dout
-        # model_dict["zdebug6"] = self.descrpt.qmat
-        # model_dict["zdebug7"] = self.descrpt.xyz_scatter_input
-        # model_dict["zdebug8"] = self.descrpt.xyz_scatter_output
-
-        # model_dict["zdebug9"] = self.descrpt.debug_inputs
-        # model_dict["zdebug99"] = self.descrpt.debug_inputs_i
-        # model_dict["zdebug999"] = self.descrpt.debug_inputs_reshape
-        # model_dict["zdebug9999"] = self.descrpt.debug_xyz_scatter
-        # model_dict["zdebug99999"] = self.descrpt.debug_xyz_scatter_input
-        # model_dict["zdebug999999"] = self.descrpt.debug_xyz_scatter_output
-
-        # model_dict["z00_hidden1"] = self.descrpt.embedding_nets[0][0].hidden1
-        # model_dict["z00_hidden2"] = self.descrpt.embedding_nets[0][0].hidden2
-        # model_dict["z00_hidden3"] = self.descrpt.embedding_nets[0][0].hidden3
-        # model_dict["z00_xx1"] = self.descrpt.embedding_nets[0][0].xx1
-        # model_dict["z00_xx2"] = self.descrpt.embedding_nets[0][0].xx2
-        # model_dict["z00_xx3"] = self.descrpt.embedding_nets[0][0].xx3
-        # model_dict["z00_xx4"] = self.descrpt.embedding_nets[0][0].xx4
-        # model_dict["z00_0"] = self.descrpt.embedding_nets[0][0].weight[0]
-        # model_dict["z00_1"] = self.descrpt.embedding_nets[0][0].bias[0]
-        # model_dict["z00_2"] = self.descrpt.embedding_nets[0][0].xx1
-        # model_dict["z00_3"] = self.descrpt.embedding_nets[0][0].hidden1
         return model_dict
 
     def init_variables(
@@ -379,8 +260,13 @@ class EnerModel(Model, paddle.nn.Layer):
             tf.constant("compressed_model", name="model_type", dtype=tf.string)
         else:
             raise RuntimeError("Unknown model type %s" % model_type)
-        if self.typeebd is not None:
-            self.typeebd.init_variables(graph, graph_def, suffix=suffix)
+        if (
+            self.typeebd is not None
+            and self.typeebd.type_embedding_net_variables is None
+        ):
+            self.typeebd.init_variables(
+                graph, graph_def, suffix=suffix, model_type=model_type
+            )
 
     def natoms_match(self, force, natoms):
         use_spin = self.spin.use_spin
@@ -477,3 +363,38 @@ class EnerModel(Model, paddle.nn.Layer):
         ghost_force = tf.concat([ghost_force_real, ghost_force_mag], axis=1)
         force = tf.concat([loc_force, ghost_force], axis=1)
         return force
+
+    def change_energy_bias(
+        self,
+        data: DeepmdDataSystem,
+        frozen_model: str,
+        origin_type_map: list,
+        full_type_map: str,
+        bias_shift: str = "delta",
+    ) -> None:
+        """Change the energy bias according to the input data and the pretrained model.
+
+        Parameters
+        ----------
+        data : DeepmdDataSystem
+            The training data.
+        frozen_model : str
+            The path file of frozen model.
+        origin_type_map : list
+            The original type_map in dataset, they are targets to change the energy bias.
+        full_type_map : str
+            The full type_map in pretrained model
+        bias_shift : str
+            The mode for changing energy bias : ['delta', 'statistic']
+            'delta' : perform predictions on energies of target dataset,
+                    and do least sqaure on the errors to obtain the target shift as bias.
+            'statistic' : directly use the statistic energy bias in the target dataset.
+        """
+        self.fitting.change_energy_bias(
+            data,
+            frozen_model,
+            origin_type_map,
+            full_type_map,
+            bias_shift,
+            self.data_bias_nsample,
+        )

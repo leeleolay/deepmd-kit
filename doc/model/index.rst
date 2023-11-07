@@ -19,3 +19,5 @@ Model
    train-se-a-mask
    dplr
    dprc
+   linear
+   pairtab

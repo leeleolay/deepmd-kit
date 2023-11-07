@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
 #include <fcntl.h>
 #include <gtest/gtest.h>
 #include <sys/stat.h>
@@ -262,7 +263,7 @@ TYPED_TEST(TestInferDeepPotModeDeviFparamAparam, cpu_lmp_list_std) {
       for (int kk = 0; kk < nmodel; ++kk) {
         avg_f[dd] += fmd[kk][ii * 3 + dd];
       }
-      avg_f[dd] /= (nmodel)*1.0;
+      avg_f[dd] /= (nmodel) * 1.0;
     }
     VALUETYPE std = 0.;
     for (int kk = 0; kk < nmodel; ++kk) {

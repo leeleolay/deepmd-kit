@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import logging
 from typing import TYPE_CHECKING
 from typing import Callable
@@ -35,6 +36,8 @@ class DeepPot(DeepEval):
     auto_batch_size : bool or int or AutomaticBatchSize, default: True
         If True, automatic batch size will be used. If int, it will be used
         as the initial batch size.
+    input_map : dict, optional
+        The input map for tf.import_graph_def. Only work with default tf graph
 
     Examples
     --------
@@ -61,6 +64,7 @@ class DeepPot(DeepEval):
         load_prefix: str = "load",
         default_tf_graph: bool = False,
         auto_batch_size: Union[bool, int, AutoBatchSize] = True,
+        input_map: Optional[dict] = None,
     ) -> None:
         # add these tensors on top of what is defined by DeepTensor Class
         # use this in favor of dict update to move attribute from class to
@@ -99,42 +103,15 @@ class DeepPot(DeepEval):
             load_prefix=load_prefix,
             # default_tf_graph=default_tf_graph,
             auto_batch_size=auto_batch_size,
+            input_map=input_map,
         )
 
-        # # load optional tensors
-        # operations = [op.name for op in self.graph.get_operations()]
-        # # check if the graph has these operations:
-        # # if yes add them
-        # if "t_efield" in operations:
-        # #     self._get_tensor("t_efield:0", "t_efield")
-        # if self._get_value("t_efield") is not None:
-        #     self._get_value("t_efield", "t_efield")
-        #     self.has_efield = True
-        # else:
-        #     log.debug("Could not get tensor 't_efield'")
-        #     self.t_efield = None
         self.has_efield = False
 
-        # if self._get_value("load/t_fparam") is not None:
-        #     self.tensors.update({"t_fparam": "t_fparam"})
-        #     self.has_fparam = True
-        # else:
-        #     log.debug("Could not get tensor 't_fparam'")
-        #     self.t_fparam = None
         self.has_fparam = False
 
-        # if self._get_value("load/t_aparam") is not None:
-        #     self.tensors.update({"t_aparam": "t_aparam"})
-        #     self.has_aparam = True
-        # else:
-        #     log.debug("Could not get tensor 't_aparam'")
-        #     self.t_aparam = None
         self.has_aparam = False
 
-        # if self._get_value("load/spin_attr/ntypes_spin") is not None:
-        #     self.tensors.update({"t_ntypes_spin": "spin_attr/ntypes_spin"})
-        #     self.has_spin = True
-        # else:
         self.ntypes_spin = 0
         self.has_spin = False
 
@@ -146,95 +123,25 @@ class DeepPot(DeepEval):
                 if attr_name != "t_descriptor":
                     raise
 
-        # self._run_default_sess()
-        # self.tmap = self.tmap.decode("UTF-8").split()
         self.ntypes = 2
         self.rcut = 6.0
         self.dfparam = 0
         self.daparam = 0
-        # self.t_tmap = self.model.t_tmap.split()
         self.t_tmap = ["O", "H"]
 
         # setup modifier
         try:
-            # t_modifier_type = self._get_tensor("modifier_attr/type:0")
-            # self.modifier_type = run_sess(self.sess, t_modifier_type).decode("UTF-8")
             self.modifier_type = self._get_value("modifier_attr.type")
         except (ValueError, KeyError):
             self.modifier_type = None
         self.modifier_type = None
         self.descriptor_type = "se_e2_a"
 
-        # try:
-        #     t_jdata = self._get_tensor("train_attr/training_script")
-        #     jdata = run_sess(self.sess, t_jdata).decode("UTF-8")
-        #     import json
-
-        #     jdata = json.loads(jdata)
-        #     self.descriptor_type = jdata["model"]["descriptor"]["type"]
-        # except (ValueError, KeyError):
-        #     self.descriptor_type = None
-
-        # if self.modifier_type == "dipole_charge":
-        #     t_mdl_name = self._get_tensor("modifier_attr/mdl_name:0")
-        #     t_mdl_charge_map = self._get_tensor("modifier_attr/mdl_charge_map:0")
-        #     t_sys_charge_map = self._get_tensor("modifier_attr/sys_charge_map:0")
-        #     t_ewald_h = self._get_tensor("modifier_attr/ewald_h:0")
-        #     t_ewald_beta = self._get_tensor("modifier_attr/ewald_beta:0")
-        #     [mdl_name, mdl_charge_map, sys_charge_map, ewald_h, ewald_beta] = run_sess(
-        #         self.sess,
-        #         [
-        #             t_mdl_name,
-        #             t_mdl_charge_map,
-        #             t_sys_charge_map,
-        #             t_ewald_h,
-        #             t_ewald_beta,
-        #         ],
-        #     )
-        #     mdl_name = mdl_name.decode("UTF-8")
-        #     mdl_charge_map = [int(ii) for ii in mdl_charge_map.decode("UTF-8").split()]
-        #     sys_charge_map = [int(ii) for ii in sys_charge_map.decode("UTF-8").split()]
-        #     self.dm = DipoleChargeModifier(
-        #         mdl_name,
-        #         mdl_charge_map,
-        #         sys_charge_map,
-        #         ewald_h=ewald_h,
-        #         ewald_beta=ewald_beta,
-        #     )
-
         # NOTE: 使用静态图模型推理
         if not hasattr(self, "st_model"):
             self.st_model = paddle.jit.load(
                 "/workspace/hesensen/deepmd_backend/deepmd-kit/examples/water/se_e2_a/Model_1000000"
             )
-            # for k, v in self.st_model.named_parameters():
-            #     print(f"{k} {v.shape} {v.mean().item()} {v.var().item()}")
-            # """
-            # param_0 [1, 25] 0.9498768667019655 0.7340928425051493
-            # param_1 [1, 50] 1.1214760345730344 0.9621536430386503
-            # param_2 [1, 100] 1.168418946306086 1.0411743399117217
-            # param_3 [1, 25] 0.002546645920014433 0.27806176560439083
-            # param_4 [25, 50] -0.015372691466039676 0.10679961485782502
-            # param_5 [50, 100] -0.0010681208730640539 0.09950205346985407
-            # param_6 [1, 25] 1.0639599744616117 0.917256936729768
-            # param_7 [1, 50] 1.142691803888668 0.9639366693005659
-            # param_8 [1, 100] 1.1471394365452061 1.0091294911290036
-            # param_9 [1, 25] 0.019013792716200625 0.1450311660373793
-            # param_10 [25, 50] -0.006747145320748169 0.028971429954693633
-            # param_11 [50, 100] -0.03750622755877242 0.04714041793007081
-            # param_12 [1, 25] 1.0380588819220322 0.8904020425094114
-            # param_13 [1, 50] 1.1245407895732316 0.9234643810098301
-            # param_14 [1, 100] 1.1430567514092813 0.9876968977916372
-            # param_15 [1, 25] 0.03272738992064966 0.1751917732380509
-            # param_16 [25, 50] -0.017871745658352124 0.0384813911462805
-            # param_17 [50, 100] -0.07345191324160481 0.1768254187693918
-            # param_18 [1, 25] 1.0147830400771964 0.9070964180637516
-            # param_19 [1, 50] 1.1198266551333698 1.034746190888665
-            # param_20 [1, 100] 1.1410748813679754 1.0428001731414345
-            # param_21 [1, 25] -0.022862385119536602 0.18038150422614693
-            # param_22 [25, 50] -0.024970130750642985 0.07176423978220656
-            # param_23 [50, 100] -0.012309303874398866 0.07227932085917015
-            # """
 
     def _run_default_sess(self):
         if self.has_spin is True:
@@ -338,7 +245,10 @@ class DeepPot(DeepEval):
             natoms = len(atom_types[0])
         else:
             natoms = len(atom_types)
-        coords = np.reshape(np.array(coords), [-1, natoms * 3])
+        if natoms == 0:
+            assert coords.size == 0
+        else:
+            coords = np.reshape(np.array(coords), [-1, natoms * 3])
         nframes = coords.shape[0]
         return natoms, nframes
 
@@ -435,7 +345,6 @@ class DeepPot(DeepEval):
         atom_types,
         fparam=None,
         aparam=None,
-        atomic=False,
         efield=None,
         mixed_type=False,
     ):
@@ -447,7 +356,7 @@ class DeepPot(DeepEval):
             atom_types = np.array(atom_types, dtype=int).reshape([-1, natoms])
         else:
             atom_types = np.array(atom_types, dtype=int).reshape([-1])
-        coords = np.reshape(np.array(coords), [-1, natoms * 3])
+        coords = np.reshape(np.array(coords), [nframes, natoms * 3])
         if cells is None:
             pbc = False
             # make cells to work around the requirement of pbc
@@ -508,32 +417,6 @@ class DeepPot(DeepEval):
         assert natoms_vec[0] == natoms
 
         # evaluate
-        # feed_dict_test = {}
-        # feed_dict_test[self.t_natoms] = natoms_vec
-        # if mixed_type:
-        #     feed_dict_test[self.t_type] = atom_types.reshape([-1])
-        # else:
-        #     feed_dict_test[self.t_type] = np.tile(atom_types, [nframes, 1]).reshape(
-        #         [-1]
-        #     )
-        # feed_dict_test[self.t_coord] = np.reshape(coords, [-1])
-
-        # if len(self.t_box.shape) == 1:
-        #     feed_dict_test[self.t_box] = np.reshape(cells, [-1])
-        # elif len(self.t_box.shape) == 2:
-        #     feed_dict_test[self.t_box] = cells
-        # else:
-        #     raise RuntimeError
-        # if self.has_efield:
-        #     feed_dict_test[self.t_efield] = np.reshape(efield, [-1])
-        # if pbc:
-        #     feed_dict_test[self.t_mesh] = make_default_mesh(cells)
-        # else:
-        #     feed_dict_test[self.t_mesh] = np.array([], dtype=np.int32)
-        # if self.has_fparam:
-        #     feed_dict_test[self.t_fparam] = np.reshape(fparam, [-1])
-        # if self.has_aparam:
-        #     feed_dict_test[self.t_aparam] = np.reshape(aparam, [-1])
         return None, None, natoms_vec
 
     def _eval_inner(

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import os
 import shutil
 import unittest
@@ -12,6 +13,7 @@ from deepmd.utils import (
 )
 from deepmd.utils.data_system import (
     DeepmdDataSystem,
+    prob_sys_size_ext,
 )
 
 if GLOBAL_NP_FLOAT_PRECISION == np.float32:
@@ -309,7 +311,9 @@ class TestDataSystem(unittest.TestCase):
         batch_size = 1
         test_size = 1
         ds = DeepmdDataSystem(self.sys_name, batch_size, test_size, 2.0)
-        prob = ds._prob_sys_size_ext("prob_sys_size; 0:2:2; 2:4:8")
+        prob = prob_sys_size_ext(
+            "prob_sys_size; 0:2:2; 2:4:8", ds.get_nsystems(), ds.get_nbatches()
+        )
         self.assertAlmostEqual(np.sum(prob), 1)
         self.assertAlmostEqual(np.sum(prob[0:2]), 0.2)
         self.assertAlmostEqual(np.sum(prob[2:4]), 0.8)
@@ -331,7 +335,9 @@ class TestDataSystem(unittest.TestCase):
         batch_size = 1
         test_size = 1
         ds = DeepmdDataSystem(self.sys_name, batch_size, test_size, 2.0)
-        prob = ds._prob_sys_size_ext("prob_sys_size; 1:2:0.4; 2:4:1.6")
+        prob = prob_sys_size_ext(
+            "prob_sys_size; 1:2:0.4; 2:4:1.6", ds.get_nsystems(), ds.get_nbatches()
+        )
         self.assertAlmostEqual(np.sum(prob), 1)
         self.assertAlmostEqual(np.sum(prob[1:2]), 0.2)
         self.assertAlmostEqual(np.sum(prob[2:4]), 0.8)
@@ -412,6 +418,11 @@ class TestDataSystem(unittest.TestCase):
         ds.add("null", self.test_ndof, atomic=True, must=False)
         random.seed(114514)
         # with this seed, the batch is fixed, with natoms 3, 6, 6
+        # keep the random behavior before #2481
+        for ii in range(ds.nsystems):
+            if ds.data_systems[ii].pbc:
+                ds.data_systems[ii].get_batch(ds.batch_size[ii])
+                ds.data_systems[ii].reset_get_batch()
         data = ds.get_batch()
         np.testing.assert_equal(data["natoms_vec"], np.array([6, 6, 6, 0, 0]))
         np.testing.assert_equal(data["real_natoms_vec"][:, 0], np.array([3, 6, 6]))

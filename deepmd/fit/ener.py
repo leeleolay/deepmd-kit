@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import logging
 from typing import List
 from typing import Optional
@@ -109,7 +110,7 @@ class EnerFitting(nn.Layer):
         resnet_dt: bool = True,
         numb_fparam: int = 0,
         numb_aparam: int = 0,
-        rcond: float = 1e-3,
+        rcond: Optional[float] = None,
         tot_ener_zero: bool = False,
         trainable: Optional[List[bool]] = None,
         seed: Optional[int] = None,
@@ -120,6 +121,7 @@ class EnerFitting(nn.Layer):
         layer_name: Optional[List[Optional[str]]] = None,
         use_aparam_as_mask: bool = False,
         spin: Optional[Spin] = None,
+        **kwargs,
     ) -> None:
         super().__init__(name_scope="EnerFitting")
         """Constructor."""
@@ -127,18 +129,6 @@ class EnerFitting(nn.Layer):
         self.ntypes = descrpt.get_ntypes()
         self.dim_descrpt = descrpt.get_dim_out()
         self.use_aparam_as_mask = use_aparam_as_mask
-        # args = ()\
-        #        .add('numb_fparam',      int,    default = 0)\
-        #        .add('numb_aparam',      int,    default = 0)\
-        #        .add('neuron',           list,   default = [120,120,120], alias = 'n_neuron')\
-        #        .add('resnet_dt',        bool,   default = True)\
-        #        .add('rcond',            float,  default = 1e-3) \
-        #        .add('tot_ener_zero',    bool,   default = False) \
-        #        .add('seed',             int)               \
-        #        .add('atom_ener',        list,   default = [])\
-        #        .add("activation_function", str,    default = "tanh")\
-        #        .add("precision",           str, default = "default")\
-        #        .add("trainable",        [list, bool], default = True)
         self.numb_fparam = numb_fparam
         self.numb_aparam = numb_aparam
         self.n_neuron = neuron
@@ -253,11 +243,6 @@ class EnerFitting(nn.Layer):
                 )
             )
 
-        # print("create bias_atom_e", self.bias_atom_e.shape, self.bias_atom_e)
-        # self.register_buffer(
-        #     "t_bias_atom_e",
-        #     paddle.to_tensor(self.bias_atom_e),
-        # )
         if self.numb_fparam > 0:
             if self.fparam_avg is None:
                 self.fparam_avg = 0.0
@@ -294,7 +279,7 @@ class EnerFitting(nn.Layer):
 
     def get_numb_aparam(self) -> int:
         """Get the number of atomic parameters."""
-        return self.numb_fparam
+        return self.numb_aparam
 
     def compute_output_stats(self, all_stat: dict, mixed_type: bool = False) -> None:
         """Compute the ouput statistics.
@@ -314,10 +299,6 @@ class EnerFitting(nn.Layer):
             all_stat, rcond=self.rcond, mixed_type=mixed_type
         )
         paddle.assign(self.bias_atom_e, self.t_bias_atom_e)
-        # self.register_buffer(
-        #     "t_bias_atom_e",
-        #     paddle.to_tensor(self.bias_atom_e),
-        # )
 
     def _compute_output_stats(self, all_stat, rcond=1e-3, mixed_type=False):
         data = all_stat["energy"]
@@ -355,11 +336,11 @@ class EnerFitting(nn.Layer):
             # In this situation, we directly use these assigned energies instead of computing stats.
             # This will make the loss decrease quickly
             assigned_atom_ener = np.array(
-                list(ee for ee in self.atom_ener_v if ee is not None)
+                [ee for ee in self.atom_ener_v if ee is not None]
             )
-            assigned_ener_idx = list(
-                (ii for ii, ee in enumerate(self.atom_ener_v) if ee is not None)
-            )
+            assigned_ener_idx = [
+                ii for ii, ee in enumerate(self.atom_ener_v) if ee is not None
+            ]
             # np.dot out size: nframe
             sys_ener -= np.dot(sys_tynatom[:, assigned_ener_idx], assigned_atom_ener)
             sys_tynatom[:, assigned_ener_idx] = 0.0
@@ -458,47 +439,15 @@ class EnerFitting(nn.Layer):
             ext_aparam = paddle.cast(ext_aparam, self.fitting_precision)
             layer = paddle.concat([layer, ext_aparam], axis=1)
 
-        # if nvnmd_cfg.enable:
-        #     one_layer = one_layer_nvnmd
-        # else:
-        #     one_layer = one_layer_deepmd
         for ii in range(0, len(self.n_neuron)):
-            # if self.layer_name is not None and self.layer_name[ii] is not None:
-            #     layer_suffix = "share_" + self.layer_name[ii] + type_suffix
-            #     layer_reuse = tf.AUTO_REUSE
-            # else:
-            #     layer_suffix = "layer_" + str(ii) + type_suffix + suffix
-            #     layer_reuse = reuse
             if ii >= 1 and self.n_neuron[ii] == self.n_neuron[ii - 1]:
                 layer += self.one_layers[type_i][ii](layer)
             else:
                 layer = self.one_layers[type_i][ii](layer)
-            # print(f"use {ii} of {len(self.one_layers)}_{type_i}")
-            # if (not self.uniform_seed) and (self.seed is not None):
-            #     self.seed += self.seed_shift
-            # if self.layer_name is not None and self.layer_name[-1] is not None:
-            #     layer_suffix = "share_" + self.layer_name[-1] + type_suffix
-            #     layer_reuse = tf.AUTO_REUSE
-            # else:
-            #     layer_suffix = "final_layer" + type_suffix + suffix
-            #     layer_reuse = reuse
             if (not self.uniform_seed) and (self.seed is not None):
                 self.seed += self.seed_shift
-        final_layer = self.final_layers[type_i](
-            layer,
-            # 1,
-            # activation_fn=None,
-            # bavg=bias_atom_e,
-            # name=layer_suffix,
-            # reuse=layer_reuse,
-            # seed=self.seed,
-            # precision=self.fitting_precision,
-            # trainable=self.trainable[-1],
-            # uniform_seed=self.uniform_seed,
-            # initial_variables=self.fitting_net_variables,
-            # mixed_prec=self.mixed_prec,
-            # final_layer=True,
-        )
+        final_layer = self.final_layers[type_i](layer)
+
         if (not self.uniform_seed) and (self.seed is not None):
             self.seed += self.seed_shift
 
@@ -637,18 +586,6 @@ class EnerFitting(nn.Layer):
             start_index = 0
             outs_list = []
             for type_i in range(ntypes_atom):
-                # final_layer = inputs
-                # for layer_j in range(type_i * ntypes_atom, (type_i + 1) * ntypes_atom):
-                #     final_layer = self.one_layers[layer_j](final_layer)
-                # final_layer = self.final_layers[type_i](final_layer)
-                # print(final_layer.shape)
-
-                # # concat the results
-                # if type_i < len(self.atom_ener) and self.atom_ener[type_i] is not None:
-                #     zero_layer = inputs_zero
-                #     for layer_j in range(type_i * ntypes_atom, (type_i + 1) * ntypes_atom):
-                #         zero_layer = self.one_layers[layer_j](zero_layer)
-                #     zero_layer = self.final_layers[type_i](zero_layer)
                 final_layer = self._build_lower(
                     start_index,
                     natoms[2 + type_i],
@@ -658,7 +595,6 @@ class EnerFitting(nn.Layer):
                     bias_atom_e=0.0,
                     type_suffix="_type_" + str(type_i),
                     suffix=suffix,
-                    # reuse=reuse,
                     type_i=type_i,
                 )
                 # concat the results
@@ -672,7 +608,6 @@ class EnerFitting(nn.Layer):
                         bias_atom_e=0.0,
                         type_suffix="_type_" + str(type_i),
                         suffix=suffix,
-                        # reuse=True,
                         type_i=type_i,
                     )
                     final_layer -= zero_layer
@@ -725,10 +660,9 @@ class EnerFitting(nn.Layer):
             ),
             [paddle.shape(inputs)[0], paddle.sum(natoms[2 : 2 + ntypes_atom]).item()],
         )
-        # print(__file__, self.t_bias_atom_e)
-        # exit()
         outs = outs + self.add_type
         outs *= atype_filter
+        self.atom_bias_ener *= atype_filter
         self.atom_ener_after = outs
 
         if self.tot_ener_zero:
@@ -882,14 +816,16 @@ class EnerFitting(nn.Layer):
             delta_bias = np.linalg.lstsq(type_numbs, bias_diff, rcond=None)[0]
             unbias_e = energy_predict + type_numbs @ delta_bias
             atom_numbs = type_numbs.sum(-1)
-            rmse_ae = (
-                np.sqrt(np.square(unbias_e - energy_ground_truth)) / atom_numbs
-            ).mean()
+            rmse_ae = np.sqrt(
+                np.mean(
+                    np.square(
+                        (unbias_e.ravel() - energy_ground_truth.ravel()) / atom_numbs
+                    )
+                )
+            )
             self.bias_atom_e[idx_type_map] += delta_bias.reshape(-1)
             log.info(
-                "RMSE of atomic energy after linear regression is: {} eV/atom.".format(
-                    rmse_ae
-                )
+                f"RMSE of atomic energy after linear regression is: {rmse_ae} eV/atom."
             )
         elif bias_shift == "statistic":
             statistic_bias = np.linalg.lstsq(
@@ -914,3 +850,29 @@ class EnerFitting(nn.Layer):
         """
         self.mixed_prec = mixed_prec
         self.fitting_precision = get_precision(mixed_prec["output_prec"])
+
+    def get_loss(self, loss: dict, lr) -> Loss:
+        """Get the loss function.
+
+        Parameters
+        ----------
+        loss : dict
+            The loss function parameters.
+        lr : LearningRateExp
+            The learning rate.
+
+        Returns
+        -------
+        Loss
+            The loss function.
+        """
+        _loss_type = loss.pop("type", "ener")
+        loss["starter_learning_rate"] = lr.start_lr()
+        if _loss_type == "ener":
+            return EnerStdLoss(**loss)
+        elif _loss_type == "ener_dipole":
+            return EnerDipoleLoss(**loss)
+        elif _loss_type == "ener_spin":
+            return EnerSpinLoss(**loss, use_spin=self.spin.use_spin)
+        else:
+            raise RuntimeError("unknown loss type")

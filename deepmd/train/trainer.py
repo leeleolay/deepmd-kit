@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import glob
 import logging
 import os
@@ -75,27 +76,8 @@ class DPTrainer:
     def _init_param(self, jdata):
         # model config
         model_param = j_must_have(jdata, "model")
-        self.multi_task_mode = "fitting_net_dict" in model_param
-        descrpt_param = j_must_have(model_param, "descriptor")
-        fitting_param = (
-            j_must_have(model_param, "fitting_net")
-            if not self.multi_task_mode
-            else j_must_have(model_param, "fitting_net_dict")
-        )
-        typeebd_param = model_param.get("type_embedding", None)
-        spin_param = model_param.get("spin", None)
-        self.model_param = model_param
-        self.descrpt_param = descrpt_param
-
-        # spin
-        if spin_param is not None:
-            self.spin = Spin(
-                use_spin=spin_param["use_spin"],
-                virtual_len=spin_param["virtual_len"],
-                spin_norm=spin_param["spin_norm"],
-            )
-        else:
-            self.spin = None
+        if "fitting_key" in model_param:
+            model_param["type"] = "multi"
 
         # nvnmd
         self.nvnmd_param = jdata.get("nvnmd", {})
@@ -180,76 +162,9 @@ class DPTrainer:
             self.typeebd = None
 
         # init model
-        # infer model type by fitting_type
-        if not self.multi_task_mode:
-            if self.fitting_type == "ener":
-                self.model = EnerModel(
-                    self.descrpt,
-                    self.fitting,
-                    self.typeebd,
-                    model_param.get("type_map"),
-                    model_param.get("data_stat_nbatch", 10),
-                    model_param.get("data_stat_protect", 1e-2),
-                    model_param.get("use_srtab"),
-                    model_param.get("smin_alpha"),
-                    model_param.get("sw_rmin"),
-                    model_param.get("sw_rmax"),
-                    self.spin,
-                )
-            # elif fitting_type == 'wfc':
-            #     self.model = WFCModel(model_param, self.descrpt, self.fitting)
-            elif self.fitting_type == "dos":
-                self.model = DOSModel(
-                    self.descrpt,
-                    self.fitting,
-                    self.typeebd,
-                    model_param.get("type_map"),
-                    model_param.get("data_stat_nbatch", 10),
-                    model_param.get("data_stat_protect", 1e-2),
-                )
-
-            elif self.fitting_type == "dipole":
-                self.model = DipoleModel(
-                    self.descrpt,
-                    self.fitting,
-                    self.typeebd,
-                    model_param.get("type_map"),
-                    model_param.get("data_stat_nbatch", 10),
-                    model_param.get("data_stat_protect", 1e-2),
-                )
-            elif self.fitting_type == "polar":
-                self.model = PolarModel(
-                    self.descrpt,
-                    self.fitting,
-                    self.typeebd,
-                    model_param.get("type_map"),
-                    model_param.get("data_stat_nbatch", 10),
-                    model_param.get("data_stat_protect", 1e-2),
-                )
-            # elif self.fitting_type == 'global_polar':
-            #     self.model = GlobalPolarModel(
-            #         self.descrpt,
-            #         self.fitting,
-            #         model_param.get('type_map'),
-            #         model_param.get('data_stat_nbatch', 10),
-            #         model_param.get('data_stat_protect', 1e-2)
-            #     )
-            else:
-                raise RuntimeError("get unknown fitting type when building model")
-        else:  # multi-task mode
-            self.model = MultiModel(
-                self.descrpt,
-                self.fitting_dict,
-                self.fitting_type_dict,
-                self.typeebd,
-                model_param.get("type_map"),
-                model_param.get("data_stat_nbatch", 10),
-                model_param.get("data_stat_protect", 1e-2),
-                model_param.get("use_srtab"),
-                model_param.get("smin_alpha"),
-                model_param.get("sw_rmin"),
-                model_param.get("sw_rmax"),
-            )
+        self.model = Model(**model_param)
+        self.multi_task_mode = isinstance(self.model, MultiModel)
+        self.fitting = self.model.get_fitting()
 
         def get_lr_and_coef(lr_param):
             scale_by_worker = lr_param.get("scale_by_worker", "linear")
@@ -276,13 +191,12 @@ class DPTrainer:
             self.lr_dict = {}
             self.scale_lr_coef_dict = {}
             lr_param_dict = jdata.get("learning_rate_dict", {})
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 lr_param = lr_param_dict.get(fitting_key, {})
                 (
                     self.lr_dict[fitting_key],
                     self.scale_lr_coef_dict[fitting_key],
                 ) = get_lr_and_coef(lr_param)
-
         # loss
         # infer loss type by fitting_type
         def loss_init(_loss_param, _fitting_type, _fitting, _lr) -> EnerStdLoss:
@@ -344,18 +258,10 @@ class DPTrainer:
 
         if not self.multi_task_mode:
             loss_param = jdata.get("loss", {})
-            self.loss = loss_init(loss_param, self.fitting_type, self.fitting, self.lr)
+            self.loss = self.model.get_loss(loss_param, self.lr)
         else:
-            self.loss_dict = {}
-            loss_param_dict = jdata.get("loss_dict", {})
-            for fitting_key in self.fitting_type_dict:
-                loss_param = loss_param_dict.get(fitting_key, {})
-                self.loss_dict[fitting_key] = loss_init(
-                    loss_param,
-                    self.fitting_type_dict[fitting_key],
-                    self.fitting_dict[fitting_key],
-                    self.lr_dict[fitting_key],
-                )
+            loss_param = jdata.get("loss_dict", {})
+            self.loss_dict = self.model.get_loss(loss_param, self.lr_dict)
 
         # training
         tr_data = jdata["training"]
@@ -363,7 +269,7 @@ class DPTrainer:
         if self.multi_task_mode:
             self.fitting_key_list = []
             self.fitting_prob = []
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 self.fitting_key_list.append(fitting_key)
                 # multi-task mode must have self.fitting_weight
                 self.fitting_prob.append(self.fitting_weight[fitting_key])
@@ -395,30 +301,15 @@ class DPTrainer:
         # self.auto_prob_style = tr_data['auto_prob']
         self.useBN = False
         if not self.multi_task_mode:
-            if (
-                self.fitting_type == "ener" or self.fitting_type == "dos"
-            ) and self.fitting.get_numb_fparam() > 0:
-                self.numb_fparam = self.fitting.get_numb_fparam()
-            else:
-                self.numb_fparam = 0
+            self.numb_fparam = self.model.get_numb_fparam()
 
             if tr_data.get("validation_data", None) is not None:
                 self.valid_numb_batch = tr_data["validation_data"].get("numb_btch", 1)
             else:
                 self.valid_numb_batch = 1
         else:
-            self.numb_fparam_dict = {}
+            self.numb_fparam_dict = self.model.get_numb_fparam()
             self.valid_numb_batch_dict = {}
-            for fitting_key in self.fitting_type_dict:
-                if (
-                    self.fitting_type_dict[fitting_key] == "ener"
-                    and self.fitting_dict[fitting_key].get_numb_fparam() > 0
-                ):
-                    self.numb_fparam_dict[fitting_key] = self.fitting_dict[
-                        fitting_key
-                    ].get_numb_fparam()
-                else:
-                    self.numb_fparam_dict[fitting_key] = 0
             data_dict = tr_data.get("data_dict", None)
             for systems in data_dict:
                 if data_dict[systems].get("validation_data", None) is not None:
@@ -439,12 +330,9 @@ class DPTrainer:
 
         if not self.multi_task_mode:
             if not self.is_compress and data.mixed_type:
-                assert self.descrpt_type in [
-                    "se_atten"
-                ], "Data in mixed_type format must use attention descriptor!"
-                assert self.fitting_type in [
-                    "ener"
-                ], "Data in mixed_type format must use ener fitting!"
+                assert isinstance(
+                    self.fitting, EnerFitting
+                ), "Data in mixed_type format must use ener fitting!"
 
             if self.numb_fparam > 0:
                 log.info("training with %d frame parameter(s)" % self.numb_fparam)
@@ -458,16 +346,11 @@ class DPTrainer:
             for fitting_key in data:
                 self.valid_fitting_key.append(fitting_key)
                 if data[fitting_key].mixed_type:
-                    assert self.descrpt_type in ["se_atten"], (
-                        "Data for fitting net {} in mixed_type format "
-                        "must use attention descriptor!".format(fitting_key)
-                    )
-                    assert self.fitting_type_dict[fitting_key] in [
-                        "ener"
-                    ], "Data for fitting net {} in mixed_type format must use ener fitting!".format(
+                    assert isinstance(
+                        self.fitting[fitting_key], EnerFitting
+                    ), "Data for fitting net {} in mixed_type format must use ener fitting!".format(
                         fitting_key
                     )
-
                 if self.numb_fparam_dict[fitting_key] > 0:
                     log.info(
                         "fitting net %s training with %d frame parameter(s)"
@@ -485,7 +368,7 @@ class DPTrainer:
             if not self.multi_task_mode:
                 single_data = data
             else:
-                single_data = data[list(data.keys())[0]]
+                single_data = data[next(iter(data.keys()))]
             if self.ntypes < single_data.get_ntypes():
                 raise ValueError(
                     "The number of types of the training data is %d, but that of the "
@@ -530,42 +413,15 @@ class DPTrainer:
             # TODO: this is a simple fix but we should have a clear
             #       architecture to call neighbor stat
         else:
-            graph, graph_def = load_graph_def(
-                self.model_param["compress"]["model_file"]
-            )
-            self.descrpt.enable_compression(
-                self.model_param["compress"]["min_nbor_dist"],
-                graph,
-                graph_def,
-                self.model_param["compress"]["table_config"][0],
-                self.model_param["compress"]["table_config"][1],
-                self.model_param["compress"]["table_config"][2],
-                self.model_param["compress"]["table_config"][3],
-            )
-            # for fparam or aparam settings in 'ener' type fitting net
-            self.fitting.init_variables(graph, graph_def)
-
-        # if self.is_compress or self.model_type == "compressed_model":
-        #     tf.constant("compressed_model", name="model_type", dtype=tf.string)
-        # else:
-        #     tf.constant("original_model", name="model_type", dtype=tf.string)
+            self.model.enable_compression()
 
         if self.mixed_prec is not None:
-            self.descrpt.enable_mixed_precision(self.mixed_prec)
-            if not self.multi_task_mode:
-                self.fitting.enable_mixed_precision(self.mixed_prec)
-            else:
-                for fitting_key in self.fitting_dict:
-                    self.fitting_dict[fitting_key].enable_mixed_precision(
-                        self.mixed_prec
-                    )
+            self.model.enable_mixed_precision(self.mixed_prec)
 
         self._build_lr()
         self._build_network(data, suffix)
-        # self._build_training()
 
     def _build_lr(self):
-        # self._extra_train_ops = []
         self.global_step = 0
         if not self.multi_task_mode:
             self.learning_rate = self.lr.build(self.global_step, self.stop_batch)
@@ -579,6 +435,9 @@ class DPTrainer:
         log.info("built lr")
 
     def _build_loss(self):
+        if self.stop_batch == 0:
+            # l2 is not used if stop_batch is zero
+            return None, None
         if not self.multi_task_mode:
             l2_l, l2_more = self.loss.build(
                 self.learning_rate,
@@ -592,7 +451,7 @@ class DPTrainer:
                 l2_l = tf.cast(l2_l, get_precision(self.mixed_prec["output_prec"]))
         else:
             l2_l, l2_more = {}, {}
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 lr = self.learning_rate_dict[fitting_key]
                 model = self.model_pred[fitting_key]
                 loss_dict = self.loss_dict[fitting_key]
@@ -619,12 +478,12 @@ class DPTrainer:
                 self.place_holders[kk] = tf.placeholder(
                     GLOBAL_TF_FLOAT_PRECISION, [None], "t_" + kk
                 )
-            self._get_place_horders(data_requirement)
+            self._get_place_holders(data_requirement)
         else:
             if not self.multi_task_mode:
-                self._get_place_horders(data.get_data_dict())
+                self._get_place_holders(data.get_data_dict())
             else:
-                self._get_place_horders(data[list(data.keys())[0]].get_data_dict())
+                self._get_place_holders(data[next(iter(data.keys()))].get_data_dict())
 
         self.place_holders["type"] = tf.placeholder(tf.int32, [None], name="t_type")
         self.place_holders["natoms_vec"] = tf.placeholder(
@@ -703,6 +562,11 @@ class DPTrainer:
         return optimizer
 
     def _build_training(self):
+        if self.stop_batch == 0:
+            # self.train_op is not used if stop_batch is zero
+            self.train_op = None
+            return
+
         trainable_variables = tf.trainable_variables()
 
         if not self.multi_task_mode:
@@ -713,11 +577,11 @@ class DPTrainer:
                 var_list=trainable_variables,
                 name="train_step",
             )
-            train_ops = [apply_op] + self._extra_train_ops
+            train_ops = [apply_op, *self._extra_train_ops]
             self.train_op = tf.group(*train_ops)
         else:
             self.train_op = {}
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 optimizer = self._build_optimizer(fitting_key=fitting_key)
                 apply_op = optimizer.minimize(
                     loss=self.l2_l[fitting_key],
@@ -725,7 +589,7 @@ class DPTrainer:
                     var_list=trainable_variables,
                     name=f"train_step_{fitting_key}",
                 )
-                train_ops = [apply_op] + self._extra_train_ops
+                train_ops = [apply_op, *self._extra_train_ops]
                 self.train_op[fitting_key] = tf.group(*train_ops)
         log.info("built training")
 
@@ -813,7 +677,7 @@ class DPTrainer:
                 )
             )
         else:
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 log.info(
                     "%s: start training at lr %.2e (== %.2e), decay_step %d, decay_rate %f, final lr will be %.2e"
                     % (
@@ -870,41 +734,12 @@ class DPTrainer:
         else:
             datasetloader = {}
             data_op = {}
-            for fitting_key in self.fitting_type_dict:
+            for fitting_key in self.fitting:
                 datasetloader[fitting_key] = DatasetLoader(train_data[fitting_key])
                 data_op[fitting_key] = datasetloader[fitting_key].build()
 
         while cur_batch < stop_batch:
             train_batch = datasetloader.get_data_dict()
-            # first round validation:
-            # if is_first_step:
-            #     if not self.multi_task_mode:
-            #         train_batch = train_data.get_batch()
-            #         # batch_train_op = self.train_op
-            #     else:
-            #         fitting_idx = dp_random.choice(
-            #             np.arange(self.nfitting), p=np.array(self.fitting_prob)
-            #         )
-            #         fitting_key = self.fitting_key_list[fitting_idx]
-            #         train_batch = train_data[fitting_key].get_batch()
-            #         # batch_train_op = self.train_op[fitting_key]
-            # else:
-            #     train_batch = next_datasetloader.get_data_dict(next_train_batch_list)
-            #     # batch_train_op = next_batch_train_op
-            #     fitting_key = next_fitting_key
-            # for next round
-            # if not self.multi_task_mode:
-            #     next_datasetloader = datasetloader
-            # next_batch_train_op = self.train_op
-            # next_train_batch_op = data_op
-            # else:
-            #     fitting_idx = dp_random.choice(
-            #         np.arange(self.nfitting), p=np.array(self.fitting_prob)
-            #     )
-            #     next_fitting_key = self.fitting_key_list[fitting_idx]
-            #     next_datasetloader = datasetloader[next_fitting_key]
-            # next_batch_train_op = self.train_op[fitting_key]
-            # next_train_batch_op = data_op[fitting_key]
 
             if self.display_in_training and is_first_step:
                 if self.run_opt.is_chief:
@@ -954,14 +789,7 @@ class DPTrainer:
             # use tensorboard to visualize the training of deepmd-kit
             # it will takes some extra execution time to generate the tensorboard data
             if self.tensorboard and (cur_batch % self.tensorboard_freq == 0):
-                # summary, _, next_train_batch_list = run_sess(
-                #     self.sess,
-                #     [summary_merged_op, batch_train_op, next_train_batch_op],
-                #     feed_dict=train_feed_dict,
-                #     options=prf_options,
-                #     run_metadata=prf_run_metadata,
-                # )
-                # tb_train_writer.add_summary(summary, cur_batch)
+
                 model_pred = self.model(
                     paddle.to_tensor(train_batch["coord"], "float32"),
                     paddle.to_tensor(train_batch["type"], "int32"),
@@ -973,30 +801,7 @@ class DPTrainer:
                     reuse=False,
                 )
             else:
-                # for k, v in train_feed_dict.items():
-                #     print(f"{k} {v.shape if hasattr(v, 'shape') else v}")
-                """
-                find_box:0", dtype=float32) ()
-                find_coord:0", dtype=float32) ()
-                find_numb_copy:0", dtype=float32) ()
-                find_energy:0", dtype=float32) ()
-                find_force:0", dtype=float32) ()
-                find_virial:0", dtype=float32) ()
-                find_atom_ener:0", dtype=float32) ()
-                find_atom_pref:0", dtype=float32) ()
-                box:0", shape=(?,), dtype=float64) (9,)
-                coord:0", shape=(?,), dtype=float64) (576,)
-                numb_copy:0", shape=(?,), dtype=float64) (1,)
-                energy:0", shape=(?,), dtype=float64) (1,)
-                force:0", shape=(?,), dtype=float64) (576,)
-                virial:0", shape=(?,), dtype=float64) (9,)
-                atom_ener:0", shape=(?,), dtype=float64) (192,)
-                atom_pref:0", shape=(?,), dtype=float64) (576,)
-                natoms:0", shape=(4,), dtype=int32) (4,)
-                mesh:0", shape=(?,), dtype=int32) (6,)
-                type:0", shape=(?,), dtype=int32) (192,)
-                aceholder:0", dtype=bool) True
-                """
+
                 model_inputs = {}
                 for kk in train_batch.keys():
                     if kk == "find_type" or kk == "type":
@@ -1021,35 +826,7 @@ class DPTrainer:
                 model_inputs["natoms_vec"] = paddle.to_tensor(
                     model_inputs["natoms_vec"], place="cpu"
                 )
-                # for k, v in model_inputs.items():
-                #     np.save(
-                #         "/workspace/hesensen/deepmd_backend/"
-                #         f"deepmd-kit/examples/water/se_e2_a/align_input/{k}",
-                #         v,
-                #     )
-                # exit()
-                # {
-                #     find_box: []
-                #     box: [9]
-                #     find_coord: []
-                #     coord: [576]
-                #     find_numb_copy: []
-                #     numb_copy: [1]
-                #     find_energy: []
-                #     energy: [1]
-                #     find_force: []
-                #     force: [576]
-                #     find_virial: []
-                #     virial: [9]
-                #     find_atom_ener: []
-                #     atom_ener: [192]
-                #     find_atom_pref: []
-                #     atom_pref: [576]
-                #     natoms_vec: [4]
-                #     default_mesh: [6]
-                #     type: [192]
-                #     is_training: []
-                # }
+
                 model_pred = self.model(
                     model_inputs["coord"],
                     model_inputs["type"],
@@ -1197,42 +974,7 @@ class DPTrainer:
                     total_train_time / (stop_batch // self.disp_freq * self.disp_freq),
                 )
 
-        # if self.profiling and self.run_opt.is_chief:
-        #     fetched_timeline = timeline.Timeline(prf_run_metadata.step_stats)
-        #     chrome_trace = fetched_timeline.generate_chrome_trace_format()
-        #     with open(self.profiling_file, "w") as f:
-        #         f.write(chrome_trace)
-        # if self.enable_profiler and self.run_opt.is_chief:
-        #     tfv2.profiler.experimental.stop()
-
     def save_checkpoint(self, cur_batch: int):
-        # try:
-        #     ckpt_prefix = self.saver.save(
-        #         self.sess,
-        #         os.path.join(os.getcwd(), self.save_ckpt),
-        #         global_step=cur_batch,
-        #     )
-        # except google.protobuf.message.DecodeError as e:
-        #     raise GraphTooLargeError(
-        #         "The graph size exceeds 2 GB, the hard limitation of protobuf."
-        #         " Then a DecodeError was raised by protobuf. You should "
-        #         "reduce the size of your model."
-        #     ) from e
-        # # make symlinks from prefix with step to that without step to break nothing
-        # # get all checkpoint files
-        # original_files = glob.glob(ckpt_prefix + ".*")
-        # for ori_ff in original_files:
-        #     new_ff = self.save_ckpt + ori_ff[len(ckpt_prefix) :]
-        #     try:
-        #         # remove old one
-        #         os.remove(new_ff)
-        #     except OSError:
-        #         pass
-        #     if platform.system() != "Windows":
-        #         # by default one does not have access to create symlink on Windows
-        #         os.symlink(ori_ff, new_ff)
-        #     else:
-        #         shutil.copyfile(ori_ff, new_ff)
         paddle.save(self.model.state_dict(), f"Model_{cur_batch}.pdparams")
         paddle.save(self.optimizer.state_dict(), f"Optimier_{cur_batch}.pdopt")
         log.info("saved checkpoint %s" % self.save_ckpt)
@@ -1425,7 +1167,7 @@ class DPTrainer:
         if self.is_compress:
             self.saver.save(self.sess, os.path.join(os.getcwd(), self.save_ckpt))
 
-    def _get_place_horders(self, data_dict):
+    def _get_place_holders(self, data_dict):
         for kk in data_dict.keys():
             if kk == "type":
                 continue
@@ -1532,16 +1274,12 @@ class DPTrainer:
         self, data, frozen_model, origin_type_map, bias_shift="delta"
     ):
         full_type_map = data.get_type_map()
-        assert (
-            self.fitting_type == "ener"
-        ), "energy bias changing only supports 'ener' fitting net!"
-        self.model.fitting.change_energy_bias(
+        self.model.change_energy_bias(
             data,
             frozen_model,
             origin_type_map,
             full_type_map,
             bias_shift=bias_shift,
-            ntest=self.model_param.get("data_bias_nsample", 10),
         )
 
 
@@ -1609,4 +1347,3 @@ class DatasetLoader:
         # convert dict to list of arryas
         batch_data = tuple([batch_data[kk] for kk in self.data_keys])
         return {kk: vv for kk, vv in zip(self.data_keys, batch_data)}
-        # return {kk: vv for kk, vv in zip(self.data_keys, batch_list)}

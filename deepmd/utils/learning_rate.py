@@ -3,9 +3,6 @@ from typing import Optional
 import numpy as np
 from paddle.optimizer import lr
 
-from deepmd.env import paddle
-from deepmd.env import tf
-
 
 class LearningRateExp:
     r"""The exponentially decaying learning rate.
@@ -47,9 +44,7 @@ class LearningRateExp:
         self.cd["decay_rate"] = decay_rate
         self.start_lr_ = self.cd["start_lr"]
 
-    def build(
-        self, global_step: tf.Tensor, stop_step: Optional[int] = None
-    ) -> tf.Tensor:
+    def build(self, global_step, stop_step: Optional[int] = None) -> lr.LRScheduler:
         """Build the learning rate.
 
         Parameters
@@ -87,16 +82,10 @@ class LearningRateExp:
                 np.log(self.stop_lr_ / self.start_lr_) / (stop_step / self.decay_steps_)
             )
 
-        # print("decay_steps_ = ", self.decay_steps_)
         return lr.ExponentialDecay(
             self.start_lr_,
             gamma=self.decay_rate_,
         )
-        # return paddle.optimizer.lr.ExponentialDecay(
-        #     learning_rate=self.start_lr_,
-        #     gamma=self.decay_rate_ ** (1 / self.decay_steps_),
-        #     # verbose=True,
-        # )
 
     def start_lr(self) -> float:
         """Get the start lr."""

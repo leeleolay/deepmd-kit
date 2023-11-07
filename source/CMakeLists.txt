@@ -25,10 +25,6 @@ if((NOT BUILD_PY_IF) AND (NOT BUILD_CPP_IF))
 endif()
 
 if(BUILD_CPP_IF AND BUILD_TESTING)
-  if(NOT INSTALL_TENSORFLOW)
-    # some errors in conda packages...
-    find_package(GTest)
-  endif()
   if(NOT GTEST_LIBRARIES)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/googletest.cmake.in
                    googletest-download/CMakeLists.txt @ONLY)
@@ -97,12 +93,16 @@ set(DP_VARIANT "cpu")
 
 # define USE_CUDA_TOOLKIT
 if(USE_CUDA_TOOLKIT)
-  set(CUDA_USE_STATIC_CUDA_RUNTIME
-      OFF
-      CACHE INTERNAL "")
-  find_package(CUDA REQUIRED)
+  cmake_minimum_required(VERSION 3.23)
+  find_package(CUDAToolkit REQUIRED)
+  if(NOT DEFINED CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_COMPILER ${CUDAToolkit_NVCC_EXECUTABLE})
+  endif()
+  if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+    set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
+  endif()
   add_definitions("-DGOOGLE_CUDA")
-  message(STATUS "Found CUDA in ${CUDA_TOOLKIT_ROOT_DIR}, build nv GPU support")
+  message(STATUS "Found CUDA in ${CUDAToolkit_BIN_DIR}, build nv GPU support")
   set(DP_VARIANT "cuda")
 else()
   message(STATUS "Will not build nv GPU support")
@@ -110,10 +110,15 @@ endif(USE_CUDA_TOOLKIT)
 
 # define USE_ROCM_TOOLKIT
 if(USE_ROCM_TOOLKIT)
-  find_package(ROCM REQUIRED)
+  cmake_minimum_required(VERSION 3.21)
+  include(CMakeDetermineHIPCompiler)
+  list(APPEND CMAKE_PREFIX_PATH ${CMAKE_HIP_COMPILER_ROCM_ROOT})
+  find_package(hip REQUIRED)
+  find_package(hipcub REQUIRED)
   add_definitions("-DTENSORFLOW_USE_ROCM")
-  add_compile_definitions(__HIP_PLATFORM_HCC__)
-  message(STATUS "Found ROCM in ${ROCM_ROOT}, build AMD GPU support")
+  message(
+    STATUS
+      "Found ROCM in ${CMAKE_HIP_COMPILER_ROCM_ROOT}, build AMD GPU support")
   set(DP_VARIANT "rocm")
 else()
   message(STATUS "Will not build AMD GPU support")
@@ -122,6 +127,9 @@ endif(USE_ROCM_TOOLKIT)
 set(DEEPMD_SOURCE_DIR ${PROJECT_SOURCE_DIR}/..)
 
 # setup tensorflow libraries by python
+if(INSTALL_TENSORFLOW)
+  set(USE_TF_PYTHON_LIBS TRUE)
+endif(INSTALL_TENSORFLOW)
 if(USE_TF_PYTHON_LIBS)
   if(NOT "$ENV{CIBUILDWHEEL}" STREQUAL "1")
     find_package(

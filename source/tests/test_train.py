@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
 import unittest
 from unittest.mock import (
     patch,
@@ -170,6 +171,50 @@ class TestTrain(unittest.TestCase):
                 }
             }
         }
+        jdata = update_sel(jdata)
+        self.assertEqual(jdata, expected_out)
+
+    def test_skip_frozen(self):
+        jdata = {
+            "model": {
+                "type": "frozen",
+            }
+        }
+        expected_out = jdata.copy()
+        jdata = update_sel(jdata)
+        self.assertEqual(jdata, expected_out)
+
+    def test_skip_linear_frozen(self):
+        jdata = {
+            "model": {
+                "type": "linear_ener",
+                "models": [
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                ],
+            }
+        }
+        expected_out = jdata.copy()
+        jdata = update_sel(jdata)
+        self.assertEqual(jdata, expected_out)
+
+    @patch("deepmd.entrypoints.train.get_min_nbor_dist")
+    def test_pairwise_dprc(self, sel_mock):
+        sel_mock.return_value = 0.5
+        jdata = {
+            "model": {
+                "type": "pairwise_dprc",
+                "models": [
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                    {"type": "frozen"},
+                ],
+            }
+        }
+        expected_out = jdata.copy()
         jdata = update_sel(jdata)
         self.assertEqual(jdata, expected_out)
 

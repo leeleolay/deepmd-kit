@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
 #include "custom_op.h"
 #include "soft_min_switch_force.h"
 
@@ -53,7 +54,7 @@ class SoftMinForceOp : public OpKernel {
     int nframes = du_tensor.shape().dim_size(0);
     int nloc = natoms(0);
     int nall = natoms(1);
-    int nnei = nlist_tensor.shape().dim_size(1) / nloc;
+    int nnei = nloc > 0 ? nlist_tensor.shape().dim_size(1) / nloc : 0;
 
     // check the sizes
     OP_REQUIRES(context, (nframes == sw_deriv_tensor.shape().dim_size(0)),
